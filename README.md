@@ -97,14 +97,61 @@ DOAN-KHODULIEU/
 
 ## 6. Hướng dẫn cài đặt và chạy dự án
 
-### 6.1. Yêu cầu môi trường
+### 6.1. PostgreSQL và migrations
+
+Từ thư mục gốc, tạo cấu hình cục bộ từ mẫu và thay mật khẩu bằng một mật khẩu riêng:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Khởi động PostgreSQL riêng cho dự án (cổng máy chủ `5433`, volume riêng):
+
+```powershell
+docker compose up -d postgres
+```
+
+Trong `BE`, cài dependencies, áp dụng schema và xem trạng thái migration:
+
+```powershell
+cd BE
+..\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+alembic upgrade head
+alembic current
+```
+
+Hoặc sau khi kích hoạt virtualenv tại `BE`, dùng các lệnh `alembic upgrade head`,
+`alembic downgrade -1`, `alembic current`, `alembic history` và
+`alembic revision --autogenerate -m "describe schema change"`. Migration được lưu
+trong `BE/alembic/versions`; không sửa migration đã áp dụng.
+
+Import dataset đã xử lý (chỉ chạy khi migration đã hoàn tất):
+
+```powershell
+python .\scripts\import_electricity_data.py
+```
+
+Script kiểm tra schema và từng dòng trước khi ghi, tạo/cập nhật metadata dataset,
+bỏ qua bản ghi trùng và có thể chạy lại. CSV gốc và CSV đã xử lý được giữ nguyên.
+Xem dữ liệu bằng pgAdmin với host `127.0.0.1`, port `5433`, database
+`electricity_analytics_db`, và thông tin đăng nhập trong `.env`; hoặc dùng:
+
+```powershell
+docker compose exec postgres psql -U electricity_app -d electricity_analytics_db -c "SELECT COUNT(*) FROM electricity_consumption;"
+```
+
+Để kiểm tra migration, dùng `alembic history` và `alembic current` từ thư mục `BE`.
+Kết nối backend cũng đọc `DATABASE_URL` từ biến môi trường hoặc `.env` ở thư mục gốc.
+
+### 6.2. Yêu cầu môi trường
 
 - Python 3.13.11
 - Node.js và npm
 - Git
 - PostgreSQL (khi triển khai Database)
 
-### 6.2. Chạy Backend
+### 6.3. Chạy Backend
 
 Di chuyển vào thư mục Backend:
 
@@ -148,7 +195,7 @@ API Documentation:
 http://127.0.0.1:8000/docs
 ```
 
-### 6.3. Chạy Frontend
+### 6.4. Chạy Frontend
 
 Mở Terminal mới và di chuyển vào thư mục Frontend:
 
