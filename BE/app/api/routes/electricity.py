@@ -1,9 +1,12 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from app.services.electricity import load_demand
+from app.db.database import get_db
+from app.services.electricity import load_demand_from_db
 
 router = APIRouter()
 
@@ -25,10 +28,25 @@ class DemandResponse(BaseModel):
 
 
 @router.get("/electricity/demand", response_model=DemandResponse)
-def get_demand(response: Response):
-    """Return all available months so frontend filters retain comparison history."""
+def get_demand(
+    response: Response,
+    start_month: str | None = None,
+    end_month: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Return monthly Vietnam electricity demand stored in PostgreSQL."""
     response.headers["Cache-Control"] = "no-store"
+
     try:
-        return load_demand()
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="Demand dataset is unavailable or invalid") from exc
+        return load_demand_from_db(
+            db,
+            start_month=start_month,
+            end_month=end_month,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Electricity data is unavailable in PostgreSQL",
+        ) from exc
