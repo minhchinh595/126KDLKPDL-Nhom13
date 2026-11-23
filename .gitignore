@@ -10,6 +10,7 @@ BE/**/*.pyc
 BE/.pytest_cache/
 BE/.mypy_cache/
 BE/.ruff_cache/
+BE/uploads/
 
 # ==============================
 # Environment variables

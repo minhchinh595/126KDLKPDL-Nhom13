@@ -6,14 +6,19 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.analysis.correlation import build_correlation
-from app.analysis.seasonality import build_seasonality
-from app.analysis.statistics import build_summary
-from app.analysis.trends import build_trend
+from app.clients.analysis import AnalysisServiceRejected, AnalysisServiceUnavailable, analysis_service_client
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption
+from app.api.dependencies import require_analyst
+from app.schemas.analysis import (
+    CorrelationResponse,
+    DistributionResponse,
+    SeasonalityResponse,
+    SummaryResponse,
+    TrendResponse,
+)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_analyst)])
 
 
 def _parse_month(value: str | None, parameter_name: str) -> date | None:
@@ -92,22 +97,26 @@ def _get_records_or_raise(
         ) from exc
 
 
-@router.get("/analysis/summary")
+def _analyze(operation: str, records: list[dict], **options) -> dict:
+    try:
+        return analysis_service_client.analyze(operation, records, **options)
+    except AnalysisServiceRejected as exc:
+        raise HTTPException(status_code=422, detail="Analysis service rejected the request") from exc
+    except AnalysisServiceUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Analysis service is unavailable") from exc
+
+
+@router.get("/analysis/summary", response_model=SummaryResponse)
 def get_summary(
     start_month: str | None = None,
     end_month: str | None = None,
     db: Session = Depends(get_db),
 ):
     records = _get_records_or_raise(db, start_month, end_month)
-    return {
-        "unit": "TWh",
-        "start_month": records[0]["month"] if records else None,
-        "end_month": records[-1]["month"] if records else None,
-        **build_summary(records),
-    }
+    return _analyze("summary", records)
 
 
-@router.get("/analysis/trend")
+@router.get("/analysis/trend", response_model=TrendResponse)
 def get_trend(
     start_month: str | None = None,
     end_month: str | None = None,
@@ -121,39 +130,30 @@ def get_trend(
         )
 
     records = _get_records_or_raise(db, start_month, end_month)
-    return {
-        "unit": "TWh",
-        **build_trend(records, window_months=window_months),
-    }
+    return _analyze("trend", records, window_months=window_months)
 
 
-@router.get("/analysis/seasonality")
+@router.get("/analysis/seasonality", response_model=SeasonalityResponse)
 def get_seasonality(
     start_month: str | None = None,
     end_month: str | None = None,
     db: Session = Depends(get_db),
 ):
     records = _get_records_or_raise(db, start_month, end_month)
-    return {
-        "unit": "TWh",
-        **build_seasonality(records),
-    }
+    return _analyze("seasonality", records)
 
 
-@router.get("/analysis/correlation")
+@router.get("/analysis/correlation", response_model=CorrelationResponse)
 def get_correlation(
     start_month: str | None = None,
     end_month: str | None = None,
     db: Session = Depends(get_db),
 ):
     records = _get_records_or_raise(db, start_month, end_month)
-    return {
-        "unit": "TWh",
-        **build_correlation(records),
-    }
+    return _analyze("correlation", records)
 
 
-@router.get("/analysis/distribution")
+@router.get("/analysis/distribution", response_model=DistributionResponse)
 def get_distribution(
     start_month: str | None = None,
     end_month: str | None = None,
@@ -167,55 +167,4 @@ def get_distribution(
         )
 
     records = _get_records_or_raise(db, start_month, end_month)
-    values = [record["value"] for record in records]
-
-    if not values:
-        return {
-            "unit": "TWh",
-            "count": 0,
-            "bins": [],
-        }
-
-    minimum = min(values)
-    maximum = max(values)
-
-    if minimum == maximum:
-        return {
-            "unit": "TWh",
-            "count": len(values),
-            "bins": [{
-                "start": minimum,
-                "end": maximum,
-                "count": len(values),
-            }],
-        }
-
-    width = (maximum - minimum) / bins
-    histogram = []
-
-    for index in range(bins):
-        bin_start = minimum + index * width
-        bin_end = maximum if index == bins - 1 else minimum + (index + 1) * width
-
-        if index == bins - 1:
-            count = sum(
-                bin_start <= value <= bin_end
-                for value in values
-            )
-        else:
-            count = sum(
-                bin_start <= value < bin_end
-                for value in values
-            )
-
-        histogram.append({
-            "start": round(bin_start, 4),
-            "end": round(bin_end, 4),
-            "count": count,
-        })
-
-    return {
-        "unit": "TWh",
-        "count": len(values),
-        "bins": histogram,
-    }
+    return _analyze("distribution", records, bins=bins)

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 from math import isfinite, sqrt
 from pathlib import Path
@@ -42,6 +44,11 @@ def _normalize_records(records: list[dict]) -> dict[str, float]:
         values_by_month[month] = value
 
     return values_by_month
+
+
+def _data_fingerprint(values_by_month: dict[str, float]) -> str:
+    payload = sorted(values_by_month.items())
+    return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
 
 
 def _build_training_samples(
@@ -137,6 +144,7 @@ def train_and_save_model(records: list[dict]) -> dict:
         "model": final_model,
         "window_months": WINDOW_MONTHS,
         "trained_through_month": latest_month,
+        "data_fingerprint": _data_fingerprint(values_by_month),
         "feature_names": [
             f"demand_lag_{lag}"
             for lag in reversed(range(1, WINDOW_MONTHS + 1))
@@ -179,7 +187,16 @@ def forecast_next_month(records: list[dict]) -> dict:
             "Prediction model is not trained. Call POST /api/prediction/train first."
         )
 
-    artifact = joblib.load(model_path)
+    try:
+        artifact = joblib.load(model_path)
+    except Exception as exc:
+        raise ValueError("Prediction model artifact cannot be loaded. Train the prediction model again.") from exc
+    if not isinstance(artifact, dict) or not all(
+        key in artifact for key in ("model", "window_months", "trained_through_month", "feature_names", "data_fingerprint")
+    ):
+        raise ValueError("Prediction model artifact is incomplete or incompatible. Train the prediction model again.")
+    if artifact.get("window_months") != WINDOW_MONTHS:
+        raise ValueError("Prediction model artifact uses an incompatible input window. Train the prediction model again.")
     latest_month = max(values_by_month)
 
     if latest_month != artifact.get("trained_through_month"):
@@ -188,6 +205,8 @@ def forecast_next_month(records: list[dict]) -> dict:
             f"{latest_month}, but the model was trained through "
             f"{artifact.get('trained_through_month')}. Train the model again."
         )
+    if _data_fingerprint(values_by_month) != artifact.get("data_fingerprint"):
+        raise ValueError("Prediction model was built from different source data. Train the model again.")
 
     forecast_month = _month_offset(latest_month, 1)
     input_months = [

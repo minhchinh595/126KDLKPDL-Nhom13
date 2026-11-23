@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption, ModelRun
 from app.prediction.model import forecast_next_month, train_and_save_model
+from app.api.dependencies import require_admin, require_analyst
+from fastapi import Query
+from sqlalchemy import func
+from math import ceil
+from app.schemas.model_runs import ModelRunListResponse, ModelRunPublic
 
 router = APIRouter()
 
@@ -63,6 +68,18 @@ def _save_run(
     return run
 
 
+def _save_failed_run(db: Session, *, stage: str, started_at: datetime, error: str) -> None:
+    db.add(ModelRun(
+        model_type="prediction", status="failed", started_at=started_at,
+        completed_at=datetime.now(timezone.utc), parameters={"stage": stage},
+        error_message=error[:2000],
+    ))
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+
+
 def _serialize_run(run: ModelRun) -> dict:
     return {
         "id": run.id,
@@ -77,9 +94,10 @@ def _serialize_run(run: ModelRun) -> dict:
     }
 
 
-@router.post("/prediction/train")
+@router.post("/prediction/train", response_model=ModelRunPublic)
 def train_prediction_model(
     db: Session = Depends(get_db),
+    _: object = Depends(require_admin),
 ):
     started_at = datetime.now(timezone.utc)
 
@@ -96,6 +114,7 @@ def train_prediction_model(
 
     except ValueError as exc:
         db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     except SQLAlchemyError as exc:
@@ -107,15 +126,17 @@ def train_prediction_model(
 
     except OSError as exc:
         db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error="Could not save model artifact")
         raise HTTPException(
             status_code=500,
             detail="Could not save the prediction model artifact",
         ) from exc
 
 
-@router.post("/prediction/run")
+@router.post("/prediction/run", response_model=ModelRunPublic)
 def run_prediction(
     db: Session = Depends(get_db),
+    _: object = Depends(require_admin),
 ):
     started_at = datetime.now(timezone.utc)
 
@@ -132,10 +153,12 @@ def run_prediction(
 
     except FileNotFoundError as exc:
         db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     except ValueError as exc:
         db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     except SQLAlchemyError as exc:
@@ -146,7 +169,7 @@ def run_prediction(
         ) from exc
 
 
-@router.get("/prediction/latest")
+@router.get("/prediction/latest", response_model=ModelRunPublic, dependencies=[Depends(require_analyst)])
 def get_latest_prediction(
     db: Session = Depends(get_db),
 ):
@@ -155,26 +178,19 @@ def get_latest_prediction(
         .where(
             ModelRun.model_type == "prediction",
             ModelRun.status == "completed",
+            ModelRun.metrics["stage"].astext == "forecast",
         )
         .order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
+        .limit(1)
     )
 
     try:
-        runs = db.execute(statement).scalars().all()
+        latest_forecast = db.execute(statement).scalar_one_or_none()
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,
             detail="Prediction run history is unavailable in PostgreSQL",
         ) from exc
-
-    latest_forecast = next(
-        (
-            run
-            for run in runs
-            if run.metrics and run.metrics.get("stage") == "forecast"
-        ),
-        None,
-    )
 
     if latest_forecast is None:
         raise HTTPException(
@@ -185,7 +201,14 @@ def get_latest_prediction(
     return _serialize_run(latest_forecast)
 
 
-@router.get("/prediction/runs/{run_id}")
+@router.get("/prediction/runs", response_model=ModelRunListResponse, dependencies=[Depends(require_analyst)])
+def list_prediction_runs(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
+    count = db.scalar(select(func.count()).select_from(ModelRun).where(ModelRun.model_type == "prediction")) or 0
+    rows = db.scalars(select(ModelRun).where(ModelRun.model_type == "prediction").order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    return {"items": [_serialize_run(row) for row in rows], "page": page, "page_size": page_size, "total": count, "pages": ceil(count / page_size)}
+
+
+@router.get("/prediction/runs/{run_id}", response_model=ModelRunPublic, dependencies=[Depends(require_analyst)])
 def get_prediction_run(
     run_id: int,
     db: Session = Depends(get_db),

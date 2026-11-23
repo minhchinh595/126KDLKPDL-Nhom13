@@ -1,75 +1,79 @@
-# API dữ liệu biểu đồ
+# Backend API và kết nối Frontend
 
-## GET /api/electricity/demand
+Backend hiện đọc dữ liệu điện từ PostgreSQL, không đọc CSV trực tiếp trong request. Router được đăng ký trong `BE/app/main.py`; OpenAPI có endpoint health, auth, users, datasets, electricity, dashboard, analysis, model runs và reports.
 
-Trả về chuỗi nhu cầu điện Việt Nam từ CSV đã xử lý, không dùng hằng số dữ liệu trong frontend.
-Endpoint trả toàn bộ lịch sử để frontend vẫn tính được MoM, YoY và biến trễ khi lọc thời gian.
+## Authentication, cookie và CORS
 
-```json
-{
-  "source": "data/processed/vietnam_electricity_demand.csv",
-  "country": "Vietnam",
-  "iso3": "VNM",
-  "unit": "TWh",
-  "total": 1,
-  "start_month": "2019-01",
-  "end_month": "2019-01",
-  "records": [{ "month": "2019-01", "value": 17.87 }]
-}
-```
+- `POST /api/auth/login`: nhận `{ "email": "...", "password": "..." }`, trả thông tin user công khai và đặt JWT trong HttpOnly cookie.
+- `POST /api/auth/logout`: xóa cookie.
+- `GET /api/auth/me`: trả user hiện tại.
+- Cookie sống theo `ACCESS_TOKEN_TTL_MINUTES`; `APP_ENV=production` bật `Secure`. JWT secret chỉ đặt trong environment, tối thiểu 32 bytes; không đưa vào Git hoặc Frontend.
+- Endpoint dữ liệu, dashboard, analysis, model-result reads và reports yêu cầu Analyst hoặc Admin. Quản lý user/dataset và chạy/train model chỉ dành cho Admin.
+- Frontend gọi API khác origin phải bật gửi cookie: `fetch(..., { credentials: "include" })` hoặc Axios `withCredentials: true`. Backend cho phép credentials và origins mặc định `http://localhost:3000`, `http://127.0.0.1:3000`; origin bổ sung khai báo trong `CORS_ORIGINS`.
 
-Ví dụ trên rút gọn còn một bản ghi. Dataset hiện có 93 tháng (2019-01 đến 2026-09).
-Nguồn là dataset đi kèm dự án, không phải dữ liệu cập nhật thời gian thực; xuất xứ bên ngoài chưa được xác minh lại.
+## Dữ liệu điện
 
-- HTTP 200: dữ liệu hợp lệ, bao gồm trường hợp `records: []`, `total: 0` và hai mốc thời gian `null`.
-- HTTP 503: file không đọc được, thiếu cột hoặc có bản ghi không hợp lệ/trùng tháng.
-- Chỉ nhận tổng nhu cầu (`iso3=VNM`, `metric=demand`, `fuel` trống), đơn vị TWh.
-- Dữ liệu sắp xếp theo tháng; đọc lại CSV ở mỗi yêu cầu, trả `Cache-Control: no-store`.
-- CORS cho `http://localhost:3000` và `http://127.0.0.1:3000`.
+### `GET /api/electricity/demand`
 
-Backend mặc định tìm file theo vị trí mã nguồn, không phụ thuộc thư mục chạy lệnh.
-Có thể đặt biến môi trường `ELECTRICITY_DATA_PATH` để sử dụng file CSV khác cùng cấu trúc.
-Khi chạy container backend, mount thư mục dữ liệu vào `/data` (chỉ đọc) hoặc đặt biến này đến file được mount.
+Đọc dữ liệu tháng `VNM / demand / fuel IS NULL / TWh` từ `electricity_consumption`. Hỗ trợ `start_month`, `end_month`, `page` (mặc định 1), `page_size` (mặc định 100, tối đa 1000). Phản hồi có `records` (gồm `id`, `month`, `value`), `total` của trang, `total_matches`, `start_month`, `end_month`, nguồn và đơn vị. API yêu cầu cookie Analyst/Admin.
 
-## Frontend
+Các endpoint dữ liệu khác: `/api/electricity/demand/statistics`, `/api/electricity/demand/{record_id}`, `/api/electricity/demand/export`.
 
-`NEXT_PUBLIC_API_URL` là địa chỉ backend, không chứa `/api` ở cuối, mặc định `http://localhost:8000`.
-Ứng dụng gọi endpoint khi mở Dashboard hoặc trang phân tích và khi nhấn **Tải lại từ API**.
-Frontend kiểm tra cấu trúc phản hồi, đơn vị, thời gian, số lượng và giá trị trước khi vẽ biểu đồ.
-Không sử dụng dữ liệu mẫu thay thế khi lỗi. Có trạng thái tải, dữ liệu rỗng, lỗi và nút thử lại;
-yêu cầu có thời hạn 15 giây và bị hủy khi rời trang.
+## Analysis, dashboard và reports
 
-Các trang sử dụng API: `/`, `/analysis/consumption`, `/analysis/trend`, `/analysis/correlation`.
-KPI, biểu đồ, biến trễ và CSV sử dụng cùng dữ liệu trả về.
-Phân bố mức tiêu thụ vẫn dùng ngưỡng cố định, chưa phải K-Means. Chưa có endpoint mô hình dự báo.
+- Dashboard: `GET /api/dashboard/overview`.
+- Analysis: `GET /api/analysis/summary`, `/trend`, `/seasonality`, `/correlation`, `/distribution`.
+- Reports: `GET /api/reports/summary`, `/analysis`, `/model-runs`, `/export`.
+- Analysis được tính từ dữ liệu nguồn khi gọi API; hiện không lưu thành bảng pattern riêng.
 
-## Chạy và kiểm tra
+## Model training, run và lịch sử
 
-Terminal backend, tại thư mục `BE`:
+Train và run là hai thao tác tách biệt. Chỉ Admin được gọi train/run; Analyst được đọc kết quả/lịch sử.
+
+| Model | Train (build artifact) | Run (nạp artifact, tạo kết quả) | Latest/history |
+|---|---|---|---|
+| Clustering K-Means | `POST /api/clustering/train` | `POST /api/clustering/run` | `GET /api/clustering/latest`, `/runs`, `/runs/{id}` |
+| Prediction | `POST /api/prediction/train` | `POST /api/prediction/run` | `GET /api/prediction/latest`, `/runs`, `/runs/{id}` |
+| Classification | `POST /api/classification/train` | `POST /api/classification/run` | `GET /api/classification/latest`, `/runs`, `/runs/{id}` |
+
+Run không huấn luyện lại. Kết quả lần run lưu trong `model_runs.metrics`; lần train cũng ghi lịch sử. Classification có ba nhãn `low`, `medium`, `high`. Prediction/Classification dự đoán tháng kế tiếp bằng 12 tháng đầu vào liên tục. Các model kiểm tra tháng cuối và fingerprint dữ liệu. Clustering lưu StandardScaler, estimator K-Means, ánh xạ nhãn ổn định, tham số chọn cụm và fingerprint; dữ liệu thay đổi sẽ khiến run trả conflict thay vì fit lại.
+
+Đường dẫn artifact mặc định dưới `BE/artifacts/`:
+
+- Clustering: `electricity_demand_kmeans.joblib`, ghi đè bằng `CLUSTERING_MODEL_PATH`.
+- Prediction: `electricity_demand_rf.joblib`, ghi đè bằng `PREDICTION_MODEL_PATH`.
+- Classification: `electricity_demand_classifier.joblib`, ghi đè bằng `CLASSIFICATION_MODEL_PATH`.
+
+Build artifact trong giai đoạn chuẩn bị demo bằng ba endpoint `/train`; ở demo chỉ gọi ba endpoint `/run`. Không xóa dữ liệu `electricity_consumption`. Để diễn tập xóa pattern, chỉ xóa bản ghi kết quả trong `model_runs` trên database test/demo riêng, sau đó gọi lại từng `/run` và các endpoint `/latest`/`/runs`.
+
+## Dataset APIs
+
+Admin có thể upload CSV bằng `POST /api/datasets/upload`, import bằng `POST /api/datasets/{id}/import`, hoặc gọi sync HTTPS cấu hình qua `DATASET_SYNC_URL` bằng `POST /api/datasets/sync`. Import dùng upsert theo khóa tự nhiên. Sync là thủ công; hiện chưa có scheduler tự động.
+
+## Chạy local
+
+Backend và Frontend hiện được chạy riêng bằng các lệnh sau (từ đúng thư mục):
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
+# Terminal Backend, tại BE
+.\venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
-Terminal frontend, tại thư mục `FE`:
-
-```powershell
+# Terminal Frontend, tại FE
 npm run dev
 ```
 
-Mở `http://localhost:8000/docs` để thử endpoint và `http://localhost:3000` để xem biểu đồ.
-Nếu frontend chạy ở cổng khác 3000, cần bổ sung origin tương ứng trong CORS backend.
+Mở `http://localhost:8000/docs` để xem OpenAPI. Nếu Frontend chạy ở origin khác, thêm origin chính xác vào `CORS_ORIGINS` và bật credentials ở request client.
 
-Kiểm tra tự động (chạy ở từng thư mục tương ứng):
+## Kiểm thử
+
+Các test API dùng database PostgreSQL riêng tên `electricity_analytics_test`; fixture từ chối mọi tên database khác và tái tạo schema trong database test. Không đặt `TEST_DATABASE_URL` trỏ vào database phát triển. Test model artifacts có thể chạy tách khỏi DB:
 
 ```powershell
-# BE: kiểm tra loader, handler, schema và cấu hình route/CORS, không dùng socket
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-# FE
-node --test src/lib/analysis-data.test.mjs src/lib/demand-api.test.mjs
-npm run build
-```
+# Tại BE
+python -m pytest --noconftest -p no:cacheprovider tests/test_model_artifacts.py -q
 
-Kiểm tra thủ công: API thành công, dừng backend để thấy lỗi, khởi động lại rồi thử lại;
-đổi một giá trị trong CSV trên bản sao, đặt `ELECTRICITY_DATA_PATH` đến bản sao, tải lại API
-và kiểm tra biểu đồ/KPI/CSV thay đổi. Không cần sửa hằng số frontend.
+# Bộ API đầy đủ, chỉ khi database riêng electricity_analytics_test sẵn sàng
+$env:TEST_DATABASE_URL = "postgresql+psycopg://<user>:<password>@127.0.0.1:5433/electricity_analytics_test"
+python -m pytest -p no:cacheprovider -q
+```
