@@ -42,3 +42,78 @@ def load_demand(path: Path | None = None) -> dict:
         "end_month": records[-1]["month"] if records else None,
         "records": records,
     }
+
+from datetime import date
+import re
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.models import ElectricityConsumption
+
+
+def load_demand_from_db(
+    session: Session,
+    start_month: str | None = None,
+    end_month: str | None = None,
+) -> dict:
+    """Read Vietnam's monthly electricity demand from PostgreSQL."""
+
+    def parse_month(value: str | None, parameter_name: str) -> date | None:
+        if value is None:
+            return None
+
+        if not re.fullmatch(r"[1-9]\d{3}-(0[1-9]|1[0-2])", value):
+            raise ValueError(
+                f"{parameter_name} must use YYYY-MM format"
+            )
+
+        return date.fromisoformat(f"{value}-01")
+
+    start_date = parse_month(start_month, "start_month")
+    end_date = parse_month(end_month, "end_month")
+
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise ValueError("start_month must be before or equal to end_month")
+
+    statement = (
+        select(
+            ElectricityConsumption.month,
+            ElectricityConsumption.value,
+            ElectricityConsumption.country,
+        )
+        .where(
+            ElectricityConsumption.iso3 == "VNM",
+            ElectricityConsumption.metric == "demand",
+            ElectricityConsumption.fuel.is_(None),
+            ElectricityConsumption.unit == "TWh",
+        )
+        .order_by(ElectricityConsumption.month)
+    )
+
+    if start_date is not None:
+        statement = statement.where(ElectricityConsumption.month >= start_date)
+
+    if end_date is not None:
+        statement = statement.where(ElectricityConsumption.month <= end_date)
+
+    rows = session.execute(statement).all()
+
+    records = [
+        {
+            "month": row.month.strftime("%Y-%m"),
+            "value": float(row.value),
+        }
+        for row in rows
+    ]
+
+    return {
+        "source": "PostgreSQL: electricity_consumption",
+        "country": rows[0].country if rows else "Vietnam",
+        "iso3": "VNM",
+        "unit": "TWh",
+        "total": len(records),
+        "start_month": records[0]["month"] if records else None,
+        "end_month": records[-1]["month"] if records else None,
+        "records": records,
+    }

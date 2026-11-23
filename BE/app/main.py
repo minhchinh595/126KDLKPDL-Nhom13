@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, electricity
-
+from app.api.routes import analysis, clustering, health, electricity, prediction, classification
 app = FastAPI(
     title="Electricity Consumption Analytics",
     description="Electricity consumption analysis and prediction system",
@@ -27,7 +26,10 @@ app.include_router(
 )
 
 app.include_router(electricity.router, prefix="/api", tags=["Electricity"])
-
+app.include_router(analysis.router, prefix="/api", tags=["Analysis"])
+app.include_router(clustering.router, prefix="/api", tags=["Clustering"])
+app.include_router(prediction.router, prefix="/api", tags=["Prediction"])
+app.include_router(classification.router, prefix="/api", tags=["Classification"],)
 
 @app.get("/")
 def root():
