@@ -17,6 +17,9 @@ import { Database, ExternalLink, Zap } from "lucide-react";
 import { checkBackend } from "@/lib/api";
 
 const ROUTE_LABELS: Record<string, string> = {
+  "/analysis/consumption": "Consumption Analysis",
+  "/analysis/trend": "Trend & Seasonality",
+  "/analysis/correlation": "Correlation",
   "/": "Tổng quan Dashboard",
   "/ingestion": "Dữ liệu & Thu thập",
   "/analysis": "Quy luật Tiêu thụ",
