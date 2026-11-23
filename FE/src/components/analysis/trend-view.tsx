@@ -2,28 +2,27 @@
 
 import { useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { RAW_DEMAND_SERIES } from "@/lib/electricity-data";
 import { mean, movingAverage, seasonalPattern, type DemandPoint } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
 
 const headers = ["Tháng", "Số quan sát", "Trung bình (TWh)", "Thấp nhất (TWh)", "Cao nhất (TWh)"];
 const tooltipStyle = { background: "var(--card)", borderColor: "var(--border)", borderRadius: 8, color: "var(--foreground)" };
-function TrendView({ points }: { points: DemandPoint[] }) {
+function TrendView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
   const [window, setWindow] = useState(6);
-  const trend = movingAverage(points, RAW_DEMAND_SERIES, window);
+  const trend = movingAverage(points, all, window);
   const seasonal = seasonalPattern(points);
   const observed = seasonal.filter(p => p.average !== null);
   const peak = observed.reduce((a, b) => a.average! > b.average! ? a : b);
   const low = observed.reduce((a, b) => a.average! < b.average! ? a : b);
   const average = mean(points.map(p => p.value))!;
   const start = points[0], end = points[points.length - 1];
-  const change = points.length > 1 ? (end.value / start.value - 1) * 100 : null;
+  const change = points.length > 1 && start.value !== 0 ? (end.value / start.value - 1) * 100 : null;
   return <>
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
       <Stat label="Biến động đầu → cuối kỳ" value={change === null ? "—" : `${change > 0 ? "+" : ""}${format(change)}%`} detail={`${start.month} → ${end.month}; chưa điều chỉnh mùa vụ`} />
       <Stat label="Tháng có TB cao nhất" value={peak.month} detail={`${format(peak.average)} TWh · ${peak.count} quan sát`} />
       <Stat label="Tháng có TB thấp nhất" value={low.month} detail={`${format(low.average)} TWh · ${low.count} quan sát`} />
-      <Stat label="Chênh lệch đỉnh / đáy" value={`${format(peak.average! - low.average!)} TWh`} detail={`${format((peak.average! - low.average!) / average * 100)}% so với trung bình toàn kỳ`} />
+      <Stat label="Chênh lệch đỉnh / đáy" value={`${format(peak.average! - low.average!)} TWh`} detail={average === 0 ? "Trung bình toàn kỳ bằng 0; không tính tỷ lệ" : `${format((peak.average! - low.average!) / average * 100)}% so với trung bình toàn kỳ`} />
     </div>
     <Panel title="Xu hướng và trung bình trượt" description="Trung bình trượt sử dụng cả các tháng trước khoảng lọc để đủ cửa sổ; không sử dụng dữ liệu tương lai."
       actions={<Selector label="Cửa sổ trung bình trượt" value={String(window)} onChange={v => setWindow(Number(v))} options={[3, 6, 12].map(n => ({ value: String(n), label: `${n} tháng` }))} />}>
@@ -58,4 +57,4 @@ function TrendView({ points }: { points: DemandPoint[] }) {
     </Panel>
   </>;
 }
-export function TrendAnalysis() { return <AnalysisWorkspace kind="trend">{points => <TrendView points={points} />}</AnalysisWorkspace>; }
+export function TrendAnalysis() { return <AnalysisWorkspace kind="trend">{(points, all) => <TrendView points={points} all={all} />}</AnalysisWorkspace>; }

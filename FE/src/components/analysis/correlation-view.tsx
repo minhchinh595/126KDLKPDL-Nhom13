@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
-import { RAW_DEMAND_SERIES } from "@/lib/electricity-data";
 import { pairedObservations, pearson, spearman, VARIABLES, type DemandPoint, type Variable } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
 
@@ -13,10 +12,10 @@ function strength(r: number | null) {
   if (abs < 0.2) return "Liên hệ tuyến tính rất yếu";
   return `Tương quan ${r < 0 ? "nghịch" : "thuận"} ${abs >= 0.8 ? "rất mạnh" : abs >= 0.6 ? "mạnh" : abs >= 0.4 ? "vừa" : "yếu"} (mức tham khảo)`;
 }
-function CorrelationView({ points }: { points: DemandPoint[] }) {
+function CorrelationView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
   const [x, setX] = useState<Variable>("previousMonth");
   const [y, setY] = useState<Variable>("demand");
-  const data = pairedObservations(points, RAW_DEMAND_SERIES, x, y);
+  const data = pairedObservations(points, all, x, y);
   const r = pearson(data.map(p => p.x), data.map(p => p.y));
   const rho = spearman(data.map(p => p.x), data.map(p => p.y));
   const variables = Object.keys(VARIABLES) as Variable[];
@@ -51,7 +50,7 @@ function CorrelationView({ points }: { points: DemandPoint[] }) {
     </Panel>
     <Panel title="Ma trận tương quan Pearson" description="Mỗi ô dùng các cặp hợp lệ riêng; số trong ngoặc là số cặp. Dấu —: dưới 3 cặp hoặc biến không đổi.">
       <DataTable caption="Ma trận hệ số Pearson" headers={["Biến", ...variables.map(v => VARIABLES[v].label)]} rows={variables.map(a => [VARIABLES[a].label, ...variables.map(b => {
-        const pairs = pairedObservations(points, RAW_DEMAND_SERIES, a, b);
+        const pairs = pairedObservations(points, all, a, b);
         const value = pearson(pairs.map(p => p.x), pairs.map(p => p.y));
         return <span key={b} className={`rounded px-2 py-1 ${value === null ? "bg-muted" : value >= 0 ? "bg-blue-500/10 text-blue-700 dark:text-blue-300" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{format(value, 3)} ({pairs.length})</span>;
       })])} />
@@ -61,4 +60,4 @@ function CorrelationView({ points }: { points: DemandPoint[] }) {
     </Panel>
   </>;
 }
-export function CorrelationAnalysis() { return <AnalysisWorkspace kind="correlation">{points => <CorrelationView points={points} />}</AnalysisWorkspace>; }
+export function CorrelationAnalysis() { return <AnalysisWorkspace kind="correlation">{(points, all) => <CorrelationView points={points} all={all} />}</AnalysisWorkspace>; }

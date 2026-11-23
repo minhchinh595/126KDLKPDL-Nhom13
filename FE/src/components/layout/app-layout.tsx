@@ -4,6 +4,7 @@ import * as React from "react";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AppHeader } from "@/components/layout/app-header";
+import { DemandDataProvider } from "@/components/dashboard/demand-data-provider";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -11,7 +12,7 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   return (
-    <SidebarProvider defaultOpen={true}>
+    <DemandDataProvider><SidebarProvider defaultOpen={true}>
       <AppSidebar />
       <SidebarInset className="flex flex-col min-w-0 bg-background">
         <AppHeader />
@@ -21,6 +22,6 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         </div>
       </SidebarInset>
-    </SidebarProvider>
+    </SidebarProvider></DemandDataProvider>
   );
 }
