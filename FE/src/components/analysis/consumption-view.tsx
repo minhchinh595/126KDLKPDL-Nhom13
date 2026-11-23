@@ -2,14 +2,13 @@
 
 import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { RAW_DEMAND_SERIES } from "@/lib/electricity-data";
 import { aggregateDemand, mean, type DemandPoint, type Granularity } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
 
 const headers = ["Kỳ", "Số tháng", "Tổng (TWh)", "TB/tháng (TWh)", "Cùng kỳ (TWh)", "YoY (%)"];
-function ConsumptionView({ points }: { points: DemandPoint[] }) {
+function ConsumptionView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
   const [group, setGroup] = useState<Granularity>("month");
-  const data = aggregateDemand(points, RAW_DEMAND_SERIES, group);
+  const data = aggregateDemand(points, all, group);
   const total = points.reduce((sum, p) => sum + p.value, 0);
   const peak = points.reduce((a, b) => a.value > b.value ? a : b);
   const low = points.reduce((a, b) => a.value < b.value ? a : b);
@@ -41,5 +40,5 @@ function ConsumptionView({ points }: { points: DemandPoint[] }) {
   </>;
 }
 export function ConsumptionAnalysis() {
-  return <AnalysisWorkspace kind="consumption">{points => <ConsumptionView points={points} />}</AnalysisWorkspace>;
+  return <AnalysisWorkspace kind="consumption">{(points, all) => <ConsumptionView points={points} all={all} />}</AnalysisWorkspace>;
 }

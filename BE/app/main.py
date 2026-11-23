@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health
+from app.api.routes import health, electricity
 
 app = FastAPI(
     title="Electricity Consumption Analytics",
@@ -25,6 +25,8 @@ app.include_router(
     prefix="/api",
     tags=["Health"]
 )
+
+app.include_router(electricity.router, prefix="/api", tags=["Electricity"])
 
 
 @app.get("/")

@@ -34,6 +34,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { checkBackend, type HealthResponse } from "@/lib/api";
+import { useDemandData } from "@/components/dashboard/demand-data-provider";
 
 const MAIN_NAV_ITEMS = [
   {
@@ -111,6 +112,7 @@ const SYSTEM_NAV_ITEMS = [
 ];
 
 export function AppSidebar() {
+  const { state: demandState } = useDemandData();
   const pathname = usePathname();
   const [backendStatus, setBackendStatus] = React.useState<"connected" | "disconnected" | "checking">("checking");
   const [healthData, setHealthData] = React.useState<HealthResponse | null>(null);
@@ -168,6 +170,7 @@ export function AppSidebar() {
               {MAIN_NAV_ITEMS.map((item) => {
                 const isActive = pathname === item.href;
                 const Icon = item.icon;
+                const badge = item.href === "/" ? (demandState.status === "success" ? `${demandState.data.total} kỳ` : "API") : item.badge;
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
@@ -181,12 +184,12 @@ export function AppSidebar() {
                           <Icon className="size-4 shrink-0" />
                           <span className="truncate text-sm">{item.title}</span>
                         </div>
-                        {item.badge && (
+                        {badge && (
                           <Badge
                             variant={isActive ? "secondary" : "outline"}
                             className="text-[10px] px-1.5 py-0 h-4 font-normal group-data-[collapsible=icon]:hidden"
                           >
-                            {item.badge}
+                            {badge}
                           </Badge>
                         )}
                       </div>

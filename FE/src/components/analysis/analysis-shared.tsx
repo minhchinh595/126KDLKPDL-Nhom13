@@ -9,28 +9,30 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useIsMounted } from "@/hooks/use-mounted";
-import { RAW_DEMAND_SERIES } from "@/lib/electricity-data";
+import { DemandDataGate, DataSourceStatus } from "@/components/dashboard/demand-data-provider";
+import type { DemandDataset } from "@/lib/demand-api";
 import type { DemandPoint } from "@/lib/analysis-data";
 
 export const format = (value: number | null, digits = 2) => value === null ? "—" : value.toLocaleString("vi-VN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
-const first = RAW_DEMAND_SERIES[0].month;
-const last = RAW_DEMAND_SERIES[RAW_DEMAND_SERIES.length - 1].month;
 const tabs = [
   { key: "consumption", title: "Consumption Analysis", description: "Theo dõi mức tiêu thụ, so sánh cùng kỳ và khám phá các giai đoạn cao điểm." },
   { key: "trend", title: "Trend & Seasonality", description: "Quan sát xu hướng dài hạn và quy luật tiêu thụ theo tháng trong năm." },
   { key: "correlation", title: "Correlation", description: "Khám phá mức độ liên hệ giữa các biến từ chuỗi tiêu thụ điện." },
 ];
-export function AnalysisWorkspace({ kind, children }: {
+function AnalysisContent({ kind, children, dataset }: {
   kind: string;
-  children: (points: DemandPoint[]) => ReactNode;
+  children: (points: DemandPoint[], all: DemandPoint[]) => ReactNode;
+  dataset: DemandDataset;
 }) {
+  const first = dataset.records[0].month;
+  const last = dataset.records[dataset.records.length - 1].month;
   const [start, setStart] = useState(first);
   const [end, setEnd] = useState(last);
   const tab = tabs.find(t => t.key === kind)!;
   const invalid = !start || !end || start > end;
-  const points = invalid ? [] : RAW_DEMAND_SERIES.filter(p => p.month >= start && p.month <= end);
+  const points = invalid ? [] : dataset.records.filter(p => p.month >= start && p.month <= end);
   function reset() { setStart(first); setEnd(last); }
-  return <AppLayout>
+  return <>
     <div className="space-y-6 min-w-0">
       <div className="space-y-2 border-b border-border pb-5">
         <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">Phân tích điện năng · Việt Nam</p>
@@ -43,9 +45,7 @@ export function AnalysisWorkspace({ kind, children }: {
           {t.title}
         </Link>)}
       </nav>
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-        <strong>Dữ liệu minh họa frontend.</strong> Sử dụng {RAW_DEMAND_SERIES.length} bản ghi có sẵn trong dự án ({first} – {last}), đơn vị TWh; chưa kết nối API phân tích. Phạm vi: toàn Việt Nam, nhu cầu điện tổng.
-      </div>
+      <DataSourceStatus data={dataset} />
       <Card className="p-4 gap-4">
         <div className="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal className="size-4" /> Bộ lọc thời gian</div>
         <div className="flex flex-wrap items-end gap-3">
@@ -55,15 +55,15 @@ export function AnalysisWorkspace({ kind, children }: {
           <label className="space-y-1 text-sm"> <span className="block">Đến tháng</span>
             <Input type="month" aria-label="Đến tháng" min={first} max={last} value={end} onChange={e => setEnd(e.target.value)} aria-invalid={invalid} className="w-44" />
           </label>
-          <Button variant="outline" onClick={() => { setStart(RAW_DEMAND_SERIES[Math.max(0, RAW_DEMAND_SERIES.length - 12)].month); setEnd(last); }}>12 tháng gần nhất</Button>
+          <Button variant="outline" onClick={() => { setStart(dataset.records[Math.max(0, dataset.records.length - 12)].month); setEnd(last); }}>12 tháng gần nhất</Button>
           <Button variant="ghost" onClick={reset}><RotateCcw /> Đặt lại</Button>
         </div>
         {invalid && <p role="alert" className="text-sm text-destructive">Vui lòng chọn đủ hai mốc; tháng bắt đầu phải trước hoặc bằng tháng kết thúc.</p>}
         <p role="status" className="text-xs text-muted-foreground">Đang chọn {points.length} tháng · Mọi chỉ số, biểu đồ và bảng bên dưới cập nhật theo bộ lọc.</p>
       </Card>
-      {!points.length ? <Card className="p-8 text-center items-center gap-3"><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Điều chỉnh khoảng thời gian hoặc khôi phục toàn bộ dữ liệu.</p><Button onClick={reset}>Khôi phục bộ lọc</Button></Card> : children(points)}
+      {!points.length ? <Card className="p-8 text-center items-center gap-3"><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Điều chỉnh khoảng thời gian hoặc khôi phục toàn bộ dữ liệu.</p><Button onClick={reset}>Khôi phục bộ lọc</Button></Card> : children(points, dataset.records)}
     </div>
-  </AppLayout>;
+  </>;
 }
 
 export function Selector({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
@@ -91,4 +91,8 @@ export function ExportCsv({ filename, headers, rows }: { filename: string; heade
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <Button variant="outline" onClick={download}><Download /> Xuất CSV</Button>;
+}
+
+export function AnalysisWorkspace({ kind, children }: { kind: string; children: (points: DemandPoint[], all: DemandPoint[]) => ReactNode }) {
+  return <AppLayout><DemandDataGate>{data => <AnalysisContent kind={kind} dataset={data}>{children}</AnalysisContent>}</DemandDataGate></AppLayout>;
 }

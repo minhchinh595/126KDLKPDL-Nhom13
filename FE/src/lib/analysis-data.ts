@@ -91,3 +91,43 @@ function ranks(values: number[]) {
   return result;
 }
 export function spearman(x: number[], y: number[]) { return pearson(ranks(x), ranks(y)); }
+
+export const DEMAND_LEVELS = [
+  { key: "low", label: "Thấp", range: "Dưới 21 TWh", color: "#10b981" },
+  { key: "medium", label: "Trung bình", range: "21 – 27 TWh", color: "#3b82f6" },
+  { key: "high", label: "Cao", range: "Trên 27 TWh", color: "#f59e0b" },
+] as const;
+export function demandLevel(value: number) { return value < 21 ? "low" : value > 27 ? "high" : "medium"; }
+
+export function filterDemand(points: DemandPoint[], start: string, end: string) {
+  if (!start || !end || start > end) return [];
+  return points.filter(p => p.month >= start && p.month <= end);
+}
+
+export function monthlyChanges(selected: DemandPoint[], all: DemandPoint[]) {
+  const lookup = new Map(all.map(p => [p.month, p.value]));
+  const growth = (current: number, previous: number | undefined) => previous === undefined || previous === 0 ? null : (current / previous - 1) * 100;
+  return selected.map(p => ({ ...p,
+    previous: lookup.get(previousYearMonth(p.month)) ?? null,
+    yoy: growth(p.value, lookup.get(previousYearMonth(p.month))),
+    mom: growth(p.value, lookup.get(previousMonth(p.month))),
+    level: demandLevel(p.value),
+  }));
+}
+
+export function summarizeDemand(selected: DemandPoint[], all: DemandPoint[]) {
+  const sorted = [...selected].sort((a, b) => a.month.localeCompare(b.month));
+  const latest = monthlyChanges(sorted.slice(-1), all)[0] ?? null;
+  return {
+    latest,
+    count: selected.length,
+    total: selected.reduce((sum, p) => sum + p.value, 0),
+    average: mean(selected.map(p => p.value)),
+    peak: selected.length ? selected.reduce((a, b) => a.value >= b.value ? a : b) : null,
+    low: selected.length ? selected.reduce((a, b) => a.value <= b.value ? a : b) : null,
+    levels: DEMAND_LEVELS.map(level => {
+      const points = selected.filter(p => demandLevel(p.value) === level.key);
+      return { ...level, count: points.length, percentage: selected.length ? points.length / selected.length * 100 : 0 };
+    }),
+  };
+}

@@ -4,7 +4,7 @@ import { Card, CardHeader, CardContent } from "@/components/ui/card";
 
 export function DashboardSkeleton() {
   return (
-    <div className="space-y-6 animate-in fade-in-50 duration-300" data-testid="dashboard-skeleton">
+    <div className="space-y-6 overflow-hidden animate-in fade-in-50 duration-300" data-testid="dashboard-skeleton">
       {/* Page Header Skeleton */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-2">
