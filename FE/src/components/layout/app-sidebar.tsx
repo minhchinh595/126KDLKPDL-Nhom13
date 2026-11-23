@@ -37,6 +37,28 @@ import { checkBackend, type HealthResponse } from "@/lib/api";
 
 const MAIN_NAV_ITEMS = [
   {
+    title: "Phân tích Tiêu thụ",
+    href: "/analysis/consumption",
+    icon: TrendingUp,
+    badge: "Cons",
+    description: "Phân tích mức tiêu thụ điện năng",
+  },
+  {
+    title: "Xu hướng & Mùa vụ",
+    href: "/analysis/trend",
+    icon: TrendingUp,
+    badge: "Trend",
+    description: "Xu hướng tiêu thụ và tính mùa vụ",
+  },
+  {
+    title: "Tương quan",
+    href: "/analysis/correlation",
+    icon: TrendingUp,
+    badge: "Corr",
+    description: "Phân tích tương quan các yếu tố",
+  },
+
+  {
     title: "Tổng quan Dashboard",
     href: "/",
     icon: LayoutDashboard,
