@@ -121,6 +121,34 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file 
 
 Check health at `http://127.0.0.1:8103/health`. Internal endpoints are `POST /internal/prediction/train` and `POST /internal/prediction/run`; they are not public browser APIs. Public train/run routes require an Admin cookie. Train explicitly fits and saves the Random Forest artifact; Run only loads the existing artifact and predicts, and the service does not train at startup. Both processes must resolve the same `PREDICTION_MODEL_PATH` (default `BE/artifacts/electricity_demand_rf.joblib`). Keep that artifact on persistent shared storage when using separate containers.
 
+## Classification Service (independent process)
+
+The Gateway retains the public `/api/classification/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the Classification Service over HTTP. The service has no database connection and directly reuses `app/classification/model.py`.
+
+Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Classification Service:
+
+```dotenv
+CLASSIFICATION_SERVICE_URL=http://127.0.0.1:8104
+CLASSIFICATION_SERVICE_SECRET=<private-random-secret-at-least-32-bytes>
+CLASSIFICATION_SERVICE_TIMEOUT_SECONDS=120
+```
+
+Run the Classification Service in its own terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn service_apps.classification.main:app --host 127.0.0.1 --port 8104 --env-file ..\.env
+```
+
+Run the Gateway in another terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
+```
+
+Check health at `http://127.0.0.1:8104/health`. Internal endpoints are `POST /internal/classification/train` and `POST /internal/classification/run`; they are not public browser APIs. Public Train and Run require an Admin cookie; Analysts can read latest and run history. Train explicitly fits and writes the Random Forest artifact. Run only loads the saved classifier and predicts, with no training at service startup or on Run failure. The service uses `CLASSIFICATION_MODEL_PATH` (default `BE/artifacts/electricity_demand_classifier.joblib`); the Gateway does not access the artifact. Mount the existing file at that path and keep it on persistent storage when using a separate container. Public endpoints remain available through the Backend Swagger page at `http://127.0.0.1:8000/docs`.
+
 ## First administrator
 
 Create an admin interactively. The password is prompted without echo and is Argon2-hashed; the command only succeeds when there is no active admin yet.

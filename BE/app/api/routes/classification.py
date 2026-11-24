@@ -5,9 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.classification.model import (
-    classify_next_month,
-    train_and_save_model,
+from app.clients.classification import (
+    ClassificationArtifactWriteError,
+    ClassificationServiceConflict,
+    ClassificationServiceError,
+    ClassificationServiceRejected,
+    ClassificationServiceUnavailable,
+    classification_service_client,
 )
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption, ModelRun
@@ -107,7 +111,7 @@ def train_classification_model(
 
     try:
         records = _load_demand_records(db)
-        result = train_and_save_model(records)
+        result = classification_service_client.train(records)
         run = _save_run(
             db,
             result=result,
@@ -119,6 +123,37 @@ def train_classification_model(
         db.rollback()
         _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    except ClassificationServiceRejected as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    except ClassificationServiceConflict as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except ClassificationArtifactWriteError as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save the classification model artifact",
+        ) from exc
+
+    except ClassificationServiceUnavailable as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=503, detail="Classification Service is unavailable") from exc
+
+    except ClassificationServiceError as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Classification Service could not complete training",
+        ) from exc
 
     except SQLAlchemyError as exc:
         db.rollback()
@@ -145,7 +180,7 @@ def run_classification(
 
     try:
         records = _load_demand_records(db)
-        result = classify_next_month(records)
+        result = classification_service_client.run(records)
         run = _save_run(
             db,
             result=result,
@@ -157,6 +192,30 @@ def run_classification(
         db.rollback()
         _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except ClassificationServiceConflict as exc:
+        db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except ClassificationServiceRejected as exc:
+        db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
+        # The legacy route returned 409 for ValueError raised by Run.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except ClassificationServiceUnavailable as exc:
+        db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=503, detail="Classification Service is unavailable") from exc
+
+    except ClassificationServiceError as exc:
+        db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Classification Service could not complete the run",
+        ) from exc
 
     except ValueError as exc:
         db.rollback()

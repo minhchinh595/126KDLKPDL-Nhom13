@@ -106,6 +106,7 @@ def test_analyst_can_read_but_cannot_manage_or_run(client, analyst):
     assert client.post("/api/clustering/run").status_code == 403
     assert client.post("/api/prediction/train").status_code == 403
     assert client.post("/api/classification/run").status_code == 403
+    assert client.post("/api/classification/train").status_code == 403
     assert client.post("/api/clustering/train").status_code == 403
 
 
@@ -213,10 +214,18 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
     from app.clustering import kmeans as clustering_model
     from app.api.routes import clustering as clustering_routes
     from app.api.routes import prediction as prediction_routes
+    from app.api.routes import classification as classification_routes
     from app.clients.prediction import (
         PredictionServiceConflict,
         PredictionServiceRejected,
         PredictionServiceUnavailable,
+    )
+    from app.clients.classification import (
+        ClassificationArtifactWriteError,
+        ClassificationServiceConflict,
+        ClassificationServiceError,
+        ClassificationServiceRejected,
+        ClassificationServiceUnavailable,
     )
     from app.clients.clustering import (
         ClusteringServiceConflict,
@@ -228,6 +237,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
     from fastapi.testclient import TestClient as ServiceTestClient
     from service_apps.clustering.main import app as clustering_service_app
     from service_apps.prediction.main import app as prediction_service_app
+    from service_apps.classification.main import app as classification_service_app
 
     root = Path(__file__).resolve().parents[2]
     csv_path = root / "data" / "processed" / "vietnam_electricity_demand.csv"
@@ -247,6 +257,9 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         prediction_secret = "prediction-integration-test-secret-at-least-32-bytes"
         monkeypatch.setenv("PREDICTION_SERVICE_SECRET", prediction_secret)
         prediction_internal_client = ServiceTestClient(prediction_service_app)
+        classification_secret = "classification-integration-test-secret-at-least-32-bytes"
+        monkeypatch.setenv("CLASSIFICATION_SERVICE_SECRET", classification_secret)
+        classification_internal_client = ServiceTestClient(classification_service_app)
 
         def call_clustering_service(operation, payload):
             response = service_client.post(
@@ -296,6 +309,36 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
             "run",
             lambda records: call_prediction_service("run", records),
         )
+
+        def call_classification_service(operation, records):
+            response = classification_internal_client.post(
+                f"/internal/classification/{operation}",
+                json={"records": records},
+                headers={"X-Classification-Service-Secret": classification_secret},
+            )
+            if response.status_code == 409:
+                raise ClassificationServiceConflict(response.json()["detail"])
+            if response.status_code == 422:
+                raise ClassificationServiceRejected(response.json()["detail"])
+            if response.status_code == 507:
+                raise ClassificationArtifactWriteError(response.json()["detail"])
+            if response.status_code == 500:
+                raise ClassificationServiceError("Classification Service failed")
+            if response.status_code >= 500:
+                raise ClassificationServiceUnavailable("Classification Service is unavailable")
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        monkeypatch.setattr(
+            classification_routes.classification_service_client,
+            "train",
+            lambda records: call_classification_service("train", records),
+        )
+        monkeypatch.setattr(
+            classification_routes.classification_service_client,
+            "run",
+            lambda records: call_classification_service("run", records),
+        )
         monkeypatch.setattr(
             clustering_routes.clustering_service_client,
             "run",
@@ -323,6 +366,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert client.get("/api/prediction/latest").json()["metrics"]["forecast_month"] == "2026-10"
         assert client.get("/api/prediction/runs").json()["total"] == 2
 
+        assert client.post("/api/classification/run").status_code == 409
         classification_train = client.post("/api/classification/train")
         assert classification_train.status_code == 200, classification_train.text
         assert classification_train.json()["metrics"]["holdout_metrics"]["confusion_matrix"]["labels"] == ["low", "medium", "high"]
@@ -330,18 +374,32 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert classification.status_code == 200, classification.text
         assert classification.json()["metrics"]["forecast_month"] == "2026-10"
         assert client.get("/api/classification/latest").json()["metrics"]["forecast_month"] == "2026-10"
-        assert client.get("/api/classification/runs").json()["total"] == 2
+        assert client.get("/api/classification/runs").json()["total"] == 3
 
 
 def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, monkeypatch):
     from app.api.routes import clustering as clustering_routes
     from app.clients.clustering import ClusteringServiceRejected
+    from app.api.routes import prediction as prediction_routes
+    from app.api.routes import classification as classification_routes
+    from app.clients.prediction import PredictionServiceRejected
+    from app.clients.classification import ClassificationServiceRejected
 
     def reject_empty_records(*_args, **_kwargs):
         raise ClusteringServiceRejected("At least four months of monthly history are required")
 
+    def reject_prediction_records(*_args, **_kwargs):
+        raise PredictionServiceRejected("At least four months of monthly history are required")
+
+    def reject_classification_records(*_args, **_kwargs):
+        raise ClassificationServiceRejected("At least four months of monthly history are required")
+
     monkeypatch.setattr(clustering_routes.clustering_service_client, "train", reject_empty_records)
     monkeypatch.setattr(clustering_routes.clustering_service_client, "run", reject_empty_records)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "train", reject_prediction_records)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "run", reject_prediction_records)
+    monkeypatch.setattr(classification_routes.classification_service_client, "train", reject_classification_records)
+    monkeypatch.setattr(classification_routes.classification_service_client, "run", reject_classification_records)
     login_admin(client, admin)
     assert client.post("/api/clustering/run").status_code == 422
     assert client.post("/api/prediction/train").status_code == 422
