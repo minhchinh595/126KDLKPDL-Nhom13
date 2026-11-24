@@ -1,4 +1,3 @@
-
 # DATABASE DESIGN
 
 ## 1. Database Overview
@@ -9,7 +8,7 @@
 - Schema: public
 - ORM: SQLAlchemy
 - Migration tool: Alembic
-- Migration revision: 20261122_0001
+- Migration revision: 20261124_0002 (head)
 - Deployment: Docker Compose
 - Verification date: 2026-11-24
 
@@ -26,44 +25,17 @@ flowchart TD
     C --> D[Data Validation]
     D --> E[Import Script]
     E --> F[(PostgreSQL)]
-    F --> G[FastAPI Backend]
-    G --> H[Frontend Dashboard]
+    F <--> G[FastAPI Gateway]
+    G <--> H[Frontend Dashboard]
+    G <--> I[Analysis / Clustering / Prediction / Classification]
+    G <--> J[Ingestion Service]
 ```
 
-Sơ đồ trên mô tả kiến trúc mục tiêu của hệ thống.
+Gateway quản lý kết nối PostgreSQL thông qua SQLAlchemy và DATABASE_URL. Các microservice xử lý nghiệp vụ riêng; Gateway quản lý giao dịch database, metadata và lịch sử import.
 
-PostgreSQL được triển khai trong Docker Container.
-Backend được thiết kế để kết nối với database thông qua
-SQLAlchemy và DATABASE_URL được cấu hình trong file .env.
+Demand API sử dụng `load_demand_from_db()` để truy vấn PostgreSQL, lọc VNM, demand, fuel IS NULL và TWh, sắp xếp theo tháng và hỗ trợ phân trang. Nguồn dữ liệu đã được xác nhận qua API thực tế. Sơ đồ mô tả kiến trúc hệ thống; chỉ luồng CSV – PostgreSQL – Demand API đã được nghiệm thu trong phạm vi Data.
 
-Hiện tại, PostgreSQL đã được khởi tạo và import thành công
-93 bản ghi. Electricity Demand API đã trả về dữ liệu
-khớp với CSV và PostgreSQL.
-
-Qua kiểm tra BE/app/services/electricity.py,
-hàm load_demand() hiện đọc trực tiếp file processed CSV
-thông qua csv.DictReader().
-
-PostgreSQL đã sẵn sàng cung cấp dữ liệu cho Backend.
-Tuy nhiên, Electricity Demand API chưa sử dụng
-PostgreSQL làm nguồn truy xuất dữ liệu.
-
-Việc tích hợp truy vấn PostgreSQL cần được
-thực hiện trong giai đoạn tiếp theo.
-
-### Current Data Architecture
-
-```mermaid
-flowchart TD
-    A[Raw CSV] --> B[Data Processing]
-    B --> C[Processed CSV]
-    C --> D[Data Validation]
-    D --> E[Import Script]
-    E --> F[(PostgreSQL)]
-    C --> G[FastAPI Backend]
-    G --> H[Frontend Dashboard]
-    F -. Pending integration .-> G
-```
+API đăng nhập qua POST `/api/auth/login`, sử dụng JWT trong HttpOnly Cookie. Demand API yêu cầu tài khoản Admin hoặc Analyst. Secret được cấu hình cục bộ trong `.env`.
 
 ## 3. Database Tables
 
@@ -71,18 +43,20 @@ flowchart TD
 |---|---|
 | datasets | Quản lý metadata của bộ dữ liệu |
 | electricity_consumption | Lưu nhu cầu điện theo tháng |
-| model_runs | Quản lý lần chạy mô hình - vai trò dự kiến |
-| users | Quản lý người dùng - vai trò dự kiến |
+| dataset_imports | Quản lý lịch sử import dataset |
+| model_runs | Quản lý lần chạy mô hình |
+| users | Quản lý người dùng |
 | alembic_version | Quản lý phiên bản migration |
 
 Phạm vi tài liệu này tập trung vào datasets
-và electricity_consumption.
+electricity_consumption và dataset_imports.
 
 ## 4. Entity Relationship Diagram
 
 ```mermaid
 erDiagram
     datasets ||--o{ electricity_consumption : contains
+    datasets ||--o{ dataset_imports : tracks
 
     datasets {
         int id PK
@@ -96,6 +70,7 @@ erDiagram
         varchar status
         timestamptz created_at
         timestamptz updated_at
+        varchar storage_key
     }
 
     electricity_consumption {
@@ -110,6 +85,20 @@ erDiagram
         numeric value
         varchar unit
         timestamptz created_at
+    }
+    dataset_imports {
+        int id PK
+        int dataset_id FK
+        varchar mode
+        varchar status
+        int rows_read
+        int inserted_count
+        int updated_count
+        int skipped_count
+        int error_count
+        text error_message
+        timestamptz started_at
+        timestamptz completed_at
     }
 ```
 
@@ -132,12 +121,15 @@ Quản lý thông tin tổng quan của mỗi bộ dữ liệu.
 | status | VARCHAR(30) | No | ready |
 | created_at | TIMESTAMPTZ | No | now() |
 | updated_at | TIMESTAMPTZ | No | now() |
+| storage_key | VARCHAR(80) | Yes | - |
 
 Constraints:
 
 - Primary key: id
 - Unique constraint: uq_datasets_name_source
 - Unique fields: name, source
+- Unique constraint: uq_datasets_storage_key (storage_key)
+- storage_key cho phép NULL đối với dataset đã tồn tại.
 
 ### 5.2. Table: electricity_consumption
 
@@ -166,18 +158,33 @@ Constraints:
 - Check constraint: ck_electricity_value_nonnegative
 - Check expression: value >= 0
 
+### 5.3. Table: dataset_imports
+
+| Column | Data Type | Nullable | Default |
+|---|---|---|---|
+| id | INTEGER | No | Auto increment |
+| dataset_id | INTEGER | No | - |
+| mode | VARCHAR(20) | No | - |
+| status | VARCHAR(20) | No | - |
+| rows_read | INTEGER | No | 0 |
+| inserted_count | INTEGER | No | 0 |
+| updated_count | INTEGER | No | 0 |
+| skipped_count | INTEGER | No | 0 |
+| error_count | INTEGER | No | 0 |
+| error_message | TEXT | Yes | - |
+| started_at | TIMESTAMPTZ | No | now() |
+| completed_at | TIMESTAMPTZ | Yes | - |
+
+Primary key: id. Foreign key: dataset_id REFERENCES datasets(id) ON DELETE CASCADE.
+
 ## 6. Table Relationships
 
-Relationship: One-to-Many (1:N)
+| Parent | Child | Relationship | Foreign key |
+|---|---|---|---|
+| datasets | electricity_consumption | 1:N | dataset_id |
+| datasets | dataset_imports | 1:N | dataset_id |
 
-datasets.id -> electricity_consumption.dataset_id
-
-Một dataset có thể chứa nhiều bản ghi nhu cầu điện.
-
-Mỗi bản ghi nhu cầu điện phải thuộc một dataset.
-
-ON DELETE CASCADE đảm bảo các bản ghi liên quan
-bị xóa khi dataset tương ứng bị xóa.
+Cả hai khóa ngoại sử dụng ON DELETE CASCADE. Mỗi bản ghi nhu cầu điện hoặc lịch sử import phải thuộc một dataset.
 
 ## 7. Indexes and Constraints
 
@@ -187,6 +194,7 @@ bị xóa khi dataset tương ứng bị xóa.
 |---|---|---|
 | datasets_pkey | Primary Key | id |
 | uq_datasets_name_source | Unique | name, source |
+| uq_datasets_storage_key | Unique | storage_key |
 
 ### 7.2. Table: electricity_consumption
 
@@ -206,6 +214,14 @@ Unique index ngăn chặn các bản ghi trùng khóa tự nhiên.
 COALESCE(fuel, '') giúp xử lý trường hợp fuel
 có giá trị NULL khi kiểm tra tính duy nhất.
 
+### 7.3. Table: dataset_imports
+
+| Index | Type | Columns |
+|---|---|---|
+| dataset_imports_pkey | Primary Key | id |
+| ix_dataset_imports_dataset_id | B-tree | dataset_id |
+| ix_dataset_imports_started_at | B-tree | started_at |
+
 ## 8. Database Configuration
 
 | Parameter | Value |
@@ -215,6 +231,7 @@ có giá trị NULL khi kiểm tra tính duy nhất.
 | Host | 127.0.0.1 |
 | Host port | 5433 |
 | Container port | 5432 |
+| Docker internal host | postgres |
 | Database | electricity_analytics_db |
 | Username | electricity_app |
 | Password | Configured in .env |
@@ -228,9 +245,12 @@ Migration directory:
 
 BE/alembic/versions/
 
-Initial migration:
+| Revision | File | Changes |
+|---|---|---|
+| 20261122_0001 | 20261122_0001_initial_schema.py | Initial schema |
+| 20261124_0002 | 20261124_0002_dataset_import_history.py | storage_key và dataset_imports |
 
-20261122_0001_initial_schema.py
+Đã sao lưu database bằng pg_dump trước khi nâng cấp. Chưa kiểm thử phục hồi bản sao lưu. Migration 0002 không tự tạo lịch sử cho các lần import trước đó; 93 bản ghi vẫn được giữ nguyên.
 
 Apply migrations:
 
@@ -246,7 +266,7 @@ alembic current
 
 Verified revision:
 
-20261122_0001 (head)
+20261124_0002 (head)
 
 Không chỉnh sửa migration đã được áp dụng.
 Các thay đổi schema cần được quản lý bằng
@@ -277,6 +297,8 @@ Quy trình:
 5. Kiểm tra bản ghi trùng.
 6. Ghi dữ liệu vào PostgreSQL.
 
+Backend mới hỗ trợ upload, import và sync qua API. Ingestion Service xử lý đọc và chuẩn hóa dữ liệu; Gateway quản lý metadata, upsert và lịch sử import. Các chức năng API này chưa được kiểm thử trong phạm vi hiện tại.
+
 ## 11. Database Validation
 
 Verification date: 2026-11-24
@@ -284,7 +306,11 @@ Verification date: 2026-11-24
 | Validation | Actual Result | Status |
 |---|---|---|
 | PostgreSQL container | Healthy | PASS |
-| Migration revision | 20261122_0001 | PASS |
+| Migration revision | 20261124_0002 (head) | PASS |
+| Database tables | 6 | PASS |
+| dataset_imports schema | Verified | PASS |
+| datasets.storage_key | Verified | PASS |
+| Records after migration | 93 | PASS |
 | CSV rows validated | 93 | PASS |
 | Records inserted | 93 | PASS |
 | Duplicates skipped - first import | 0 | PASS |
@@ -310,8 +336,13 @@ Verification date: 2026-11-24
 | CSV vs PostgreSQL | 93 records matched | PASS |
 | API vs PostgreSQL | 93 records matched | PASS |
 | Data consistency validation | All three data sources matched | PASS |
-| API data source verification | Direct CSV access confirmed in electricity.py | PASS |
-| PostgreSQL integration | Demand service currently reads CSV instead of PostgreSQL | Pending |
+| API data source verification | PostgreSQL: electricity_consumption | PASS |
+| PostgreSQL integration | Verified | PASS |
+| API login and auth/me | HTTP 200 | PASS |
+| Health readiness | HTTP 200, database connected | PASS |
+| Pagination (multiple pages) | 93 records, page_size 30 | PASS |
+
+Kết quả import và re-import được ghi nhận trước migration 0002.
 
 ### Record count verification
 
@@ -357,7 +388,8 @@ Preconditions:
 
 - PostgreSQL container is running.
 - Database migration and data import are completed.
-- FastAPI Backend is running on port 8000.
+- FastAPI Gateway is running on port 8000.
+- Tài khoản local hợp lệ; nhập email và mật khẩu khi script yêu cầu.
 
 Validation sources:
 
@@ -378,8 +410,22 @@ Actual results:
 | CSV vs API | PASS |
 | CSV vs PostgreSQL | PASS |
 | API vs PostgreSQL | PASS |
+| API source validation | PASS |
+| API metadata validation | PASS |
+| Record count validation | PASS |
+| Duplicate month validation | PASS |
+| Missing value validation | PASS |
+| Month range validation | PASS |
+| Pagination validation (4 pages, page_size=30) | PASS |
 
 Conclusion:
+
+- Multi-page pagination validation: PASS
+- Page size: 30
+- Expected number of pages: 4
+- Total retrieved records: 93
+- Overall validation result: PASS
+- Validation exit code: 0
 
 Toàn bộ 93 bản ghi giữa CSV, PostgreSQL và API
 có giá trị month và value thống nhất sau khi chuẩn hóa.
@@ -388,19 +434,9 @@ API cung cấp dữ liệu từ 2019-01 đến 2026-09.
 
 Data consistency validation: PASS.
 
-API source:
+API source: `PostgreSQL: electricity_consumption`.
 
-data/processed/vietnam_electricity_demand.csv
-
-Kết quả kiểm tra tính nhất quán không đồng nghĩa
-với việc Backend đang truy vấn trực tiếp PostgreSQL.
-
-API data source verification: Completed.
-
-The load_demand() function currently reads
-the processed CSV directly using csv.DictReader().
-
-PostgreSQL integration: Pending implementation.
+PostgreSQL integration: Verified. Toàn bộ 93 cặp month-value khớp sau khi chuẩn hóa đến 4 chữ số thập phân.
 
 ## 12. Data Persistence
 
@@ -416,88 +452,20 @@ khi cần giữ lại dữ liệu database.
 
 ## 13. Current Limitations
 
-- Database hiện được triển khai cục bộ.
-- Dataset chỉ chứa dữ liệu Việt Nam.
-- Dữ liệu có độ phân giải theo tháng.
-- Dataset có 93 quan sát.
-- Không có dữ liệu theo tỉnh thành hoặc hộ gia đình.
-- Không có dữ liệu theo ngày hoặc giờ.
-- Electricity Demand service hiện đọc trực tiếp
-  file processed CSV thông qua csv.DictReader().
-- Chưa tích hợp truy vấn PostgreSQL vào Demand API.
-- Cần phối hợp với Backend để chuyển nguồn truy xuất
-  từ CSV sang PostgreSQL.
-- Chưa nghiệm thu tích hợp toàn bộ Backend API.
-- Thiết kế chi tiết users và model_runs nằm ngoài
-  phạm vi tài liệu Data hiện tại.
-- Schema được mô tả theo migration 20261122_0001.
+- Database được triển khai cục bộ.
+- Dataset chỉ chứa dữ liệu Việt Nam theo tháng, gồm 93 quan sát.
+- Không có dữ liệu theo tỉnh thành, hộ gia đình, ngày hoặc giờ.
+- Script validation sử dụng số lượng và khoảng thời gian kỳ vọng của dataset hiện tại.
+- Chưa kiểm thử chức năng upload, sync và ghi lịch sử import qua API.
+- Chưa kiểm thử phục hồi backup.
+- Frontend và các microservice phân tích, dự báo, phân cụm, phân loại nằm ngoài phạm vi nghiệm thu Data hiện tại.
+- Thiết kế chi tiết users và model_runs nằm ngoài phạm vi tài liệu Data.
+- Schema được mô tả theo migration 20261124_0002.
 
 ## 14. Related Documents
 
-- [Data Dictionary](data-dictionary.md)## 13. Current Limitations
-- Database hiện được triển khai cục bộ.
-- Dataset chỉ chứa dữ liệu Việt Nam.
-- Dữ liệu có độ phân giải theo tháng.
-- Dataset có 93 quan sát.
-- Không có dữ liệu theo tỉnh thành hoặc hộ gia đình.
-- Không có dữ liệu theo ngày hoặc giờ.
-- Electricity Demand service hiện đọc trực tiếp
-  file processed CSV thông qua csv.DictReader().
-- Chưa tích hợp truy vấn PostgreSQL vào Demand API.
-- Cần phối hợp với Backend để chuyển nguồn truy xuất
-  từ CSV sang PostgreSQL.
-- Chưa nghiệm thu tích hợp toàn bộ Backend API.
-- Thiết kế chi tiết users và model_runs nằm ngoài
-  phạm vi tài liệu Data hiện tại.
-- Schema được mô tả theo migration 20261122_0001.## 13. Current Limitations
-
-- Database hiện được triển khai cục bộ.
-- Dataset chỉ chứa dữ liệu Việt Nam.
-- Dữ liệu có độ phân giải theo tháng.
-- Dataset có 93 quan sát.
-- Không có dữ liệu theo tỉnh thành hoặc hộ gia đình.
-- Không có dữ liệu theo ngày hoặc giờ.
-- Electricity Demand service hiện đọc trực tiếp
-  file processed CSV thông qua csv.DictReader().
-- Chưa tích hợp truy vấn PostgreSQL vào Demand API.
-- Cần phối hợp với Backend để chuyển nguồn truy xuất
-  từ CSV sang PostgreSQL.
-- Chưa nghiệm thu tích hợp toàn bộ Backend API.## 13. Current Limitations
-
-- Database hiện được triển khai cục bộ.
-- Dataset chỉ chứa dữ liệu Việt Nam.
-- Dữ liệu có độ phân giải theo tháng.
-- Dataset có 93 quan sát.
-- Không có dữ liệu theo tỉnh thành hoặc hộ gia đình.
-- Không có dữ liệu theo ngày hoặc giờ.
-- Electricity Demand service hiện đọc trực tiếp
-  file processed CSV thông qua csv.DictReader().
-- Chưa tích hợp truy vấn PostgreSQL vào Demand API.
-- Cần phối hợp với Backend để chuyển nguồn truy xuất
-  từ CSV sang PostgreSQL.
-- Chưa nghiệm thu tích hợp toàn bộ Backend API.
-- Thiết kế chi tiết users và model_runs nằm ngoài
-  phạm vi tài liệu Data hiện tại.
-- Schema được mô tả theo migration 20261122_0001.
-- Thiết kế chi tiết users và model_runs nằm ngoài
-  phạm vi tài liệu Data hiện tại.
-- Schema được mô tả theo migration 20261122_0001.## 13. Current Limitations
-
-- Database hiện được triển khai cục bộ.
-- Dataset chỉ chứa dữ liệu Việt Nam.
-- Dữ liệu có độ phân giải theo tháng.
-- Dataset có 93 quan sát.
-- Không có dữ liệu theo tỉnh thành hoặc hộ gia đình.
-- Không có dữ liệu theo ngày hoặc giờ.
-- Electricity Demand service hiện đọc trực tiếp
-  file processed CSV thông qua csv.DictReader().
-- Chưa tích hợp truy vấn PostgreSQL vào Demand API.
-- Cần phối hợp với Backend để chuyển nguồn truy xuất
-  từ CSV sang PostgreSQL.
-- Chưa nghiệm thu tích hợp toàn bộ Backend API.
-- Thiết kế chi tiết users và model_runs nằm ngoài
-  phạm vi tài liệu Data hiện tại.
-- Schema được mô tả theo migration 20261122_0001.
+- [Data Dictionary](data-dictionary.md)
 - [API Documentation](api-documentation.md)
 - [System Architecture](architecture.md)
+- [Service Architecture](service-architecture.md)
 - [Algorithms](algorithms.md)
