@@ -211,8 +211,16 @@ def test_sync_status_is_configurable_and_safe(client, admin, monkeypatch):
 
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):
     from app.clustering import kmeans as clustering_model
+    from app.api.routes import clustering as clustering_routes
+    from app.clients.clustering import (
+        ClusteringServiceConflict,
+        ClusteringServiceRejected,
+        ClusteringServiceUnavailable,
+    )
     from app.prediction import model as prediction_model
     from app.classification import model as classification_model
+    from fastapi.testclient import TestClient as ServiceTestClient
+    from service_apps.clustering.main import app as clustering_service_app
 
     root = Path(__file__).resolve().parents[2]
     csv_path = root / "data" / "processed" / "vietnam_electricity_demand.csv"
@@ -226,6 +234,37 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         monkeypatch.setattr(clustering_model, "artifact_path", lambda: Path(artifacts_dir) / "clustering_test.joblib")
         monkeypatch.setattr(prediction_model, "_artifact_path", lambda: Path(artifacts_dir) / "prediction_test.joblib")
         monkeypatch.setattr(classification_model, "_artifact_path", lambda: Path(artifacts_dir) / "classification_test.joblib")
+        secret = "clustering-integration-test-secret-at-least-32-bytes"
+        monkeypatch.setenv("CLUSTERING_SERVICE_SECRET", secret)
+        service_client = ServiceTestClient(clustering_service_app)
+
+        def call_clustering_service(operation, payload):
+            response = service_client.post(
+                f"/internal/clustering/{operation}",
+                json=payload,
+                headers={"X-Clustering-Service-Secret": secret},
+            )
+            if response.status_code == 409:
+                raise ClusteringServiceConflict(response.json()["detail"])
+            if response.status_code == 422:
+                raise ClusteringServiceRejected(response.json()["detail"])
+            if response.status_code >= 500:
+                raise ClusteringServiceUnavailable("Clustering Service is unavailable")
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        monkeypatch.setattr(
+            clustering_routes.clustering_service_client,
+            "train",
+            lambda records, max_k=5: call_clustering_service(
+                "train", {"records": records, "max_k": max_k}
+            ),
+        )
+        monkeypatch.setattr(
+            clustering_routes.clustering_service_client,
+            "run",
+            lambda records: call_clustering_service("run", {"records": records}),
+        )
         login_admin(client, admin)
 
         assert client.post("/api/clustering/run").status_code == 409
@@ -258,7 +297,15 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert client.get("/api/classification/runs").json()["total"] == 2
 
 
-def test_failed_model_attempts_are_recorded_without_fake_results(client, admin):
+def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, monkeypatch):
+    from app.api.routes import clustering as clustering_routes
+    from app.clients.clustering import ClusteringServiceRejected
+
+    def reject_empty_records(*_args, **_kwargs):
+        raise ClusteringServiceRejected("At least four months of monthly history are required")
+
+    monkeypatch.setattr(clustering_routes.clustering_service_client, "train", reject_empty_records)
+    monkeypatch.setattr(clustering_routes.clustering_service_client, "run", reject_empty_records)
     login_admin(client, admin)
     assert client.post("/api/clustering/run").status_code == 422
     assert client.post("/api/prediction/train").status_code == 422
