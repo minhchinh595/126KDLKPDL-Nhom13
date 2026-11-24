@@ -65,6 +65,34 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file 
 
 Check service health with `Invoke-RestMethod http://127.0.0.1:8101/health`. To check the Gateway path, log in through `/api/auth/login` with a cookie jar, then call `GET http://127.0.0.1:8000/api/analysis/summary` with that cookie. With a valid session and DB, the response should include the analysis summary; stopping Analysis Service should cause the same public route to return `503` with a generic service-unavailable detail. Internal service credentials and URLs are not returned to the browser.
 
+## Clustering Service (independent process)
+
+The Gateway retains all public `/api/clustering/*` endpoints, authentication, PostgreSQL reads, and `model_runs` persistence. It calls a separate Clustering Service over HTTP. The Clustering Service has no database connection; it reuses `app/clustering/kmeans.py`, validates monthly records, and authenticates Gateway requests with `X-Clustering-Service-Secret`.
+
+Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Clustering Service:
+
+```dotenv
+CLUSTERING_SERVICE_URL=http://127.0.0.1:8102
+CLUSTERING_SERVICE_SECRET=<private-random-secret-at-least-32-bytes>
+CLUSTERING_SERVICE_TIMEOUT_SECONDS=30
+```
+
+Run the Clustering Service in its own terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn service_apps.clustering.main:app --host 127.0.0.1 --port 8102 --env-file ..\.env
+```
+
+Run the Gateway in another terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
+```
+
+Check service health at `http://127.0.0.1:8102/health`. Its internal endpoints are `POST /internal/clustering/train` and `POST /internal/clustering/run`; they are not public browser APIs. The Gateway's public train/run routes remain documented at `http://127.0.0.1:8000/docs` and require an Admin cookie. Train is the only operation that fits or writes the K-Means artifact. Run loads the artifact and returns conflict when it is absent, incompatible, stale, or built from a different monthly dataset. Both processes must resolve the same `CLUSTERING_MODEL_PATH`; if unset in local development, the existing `BE/artifacts/electricity_demand_kmeans.joblib` default is used. No training runs at service startup.
+
 ## First administrator
 
 Create an admin interactively. The password is prompted without echo and is Argon2-hashed; the command only succeeds when there is no active admin yet.
