@@ -50,19 +50,19 @@ export function MetricCard({
   const styles = VARIANT_STYLES[variant];
 
   return (
-    <Card className="p-4 border border-border shadow-xs hover:shadow-md transition-shadow">
+    <Card className="p-5 gap-4 shadow-sm hover:shadow-md transition-shadow">
       <div className="flex items-center justify-between pb-1">
-        <span className="text-xs font-medium text-muted-foreground truncate" title={title}>
+        <span className="text-xs font-medium text-muted-foreground leading-relaxed" title={title}>
           {title}
         </span>
-        <div className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${styles.iconBg}`}>
+        <div className={`flex size-10 shrink-0 items-center justify-center rounded-lg ${styles.iconBg}`}>
           <Icon className="size-4" />
         </div>
       </div>
 
       <div className="space-y-1.5 pt-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="text-2xl font-bold tracking-tight text-foreground font-mono">
+          <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
             {value}
           </span>
           {unit && (
@@ -95,9 +95,9 @@ export function MetricCard({
             </Badge>
           )}
           {description ? (
-            <span className="text-[11px] text-muted-foreground truncate">{description}</span>
+            <span className="text-xs text-muted-foreground leading-relaxed">{description}</span>
           ) : trendLabel ? (
-            <span className="text-[11px] text-muted-foreground truncate">{trendLabel}</span>
+            <span className="text-xs text-muted-foreground leading-relaxed">{trendLabel}</span>
           ) : null}
         </div>
       </div>

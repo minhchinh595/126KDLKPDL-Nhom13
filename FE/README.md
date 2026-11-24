@@ -1,118 +1,118 @@
-# Electricity Analytics Frontend
+# Electricity Consumption Analytics — Frontend
 
-## Đăng nhập để tải dữ liệu
+Frontend chỉ gọi API Gateway `http://localhost:8001`. Không gọi service 8101–8105, không truy cập PostgreSQL và không dùng dữ liệu mẫu để thay thế API lỗi.
 
-Backend mới yêu cầu cookie đăng nhập cho API tiêu thụ. Khi nhận HTTP 401, Dashboard và các trang
-phân tích hiển thị form đăng nhập: nhập email/mật khẩu tài khoản Admin hoặc Analyst đã tạo trên backend.
-Đăng nhập thành công sẽ tải lại biểu đồ; không cần đăng nhập qua Swagger.
-
-Yêu cầu đăng nhập và dữ liệu đều dùng `credentials: "include"`, cookie do backend giữ ở chế độ HttpOnly.
-Frontend không lưu mật khẩu hoặc JWT vào localStorage. Cookie `SameSite=Lax` cần frontend và API cùng site:
-khi chạy local, client đồng bộ `localhost`/`127.0.0.1` với hostname trên thanh địa chỉ, giữ nguyên cổng API.
-Địa chỉ API từ xa không bị đổi. Các origin frontend vẫn phải được khai báo trong CORS backend.
-
-Client tải đủ các trang của API `/api/electricity/demand` trước khi tính KPI/biểu đồ để không mất lịch sử
-khi dataset vượt giới hạn một trang. HTTP 403 hiển thị lỗi quyền truy cập; HTTP 401 hiển thị form đăng nhập lại.
-
-## Overview Dashboard
-
-### API đang được sử dụng
-
-| Màn hình | API |
-|---|---|
-| Toàn bộ chuỗi dữ liệu, bảng, so sánh cùng kỳ | `/api/electricity/demand` (đọc đủ phân trang) |
-| Thống kê toàn kho trên Dashboard | `/api/dashboard/overview` |
-| KPI theo khoảng lọc trên Dashboard và Consumption | `/api/analysis/summary` |
-| Đường trung bình trượt trên Dashboard và Trend | `/api/analysis/trend` |
-| Thống kê theo tháng trên Dashboard và Trend | `/api/analysis/seasonality` |
-| Hệ số và ma trận Pearson trên Correlation | `/api/analysis/correlation` |
-| Histogram trên Dashboard và Consumption | `/api/analysis/distribution` |
-
-Các API phân tích nhận `start_month`/`end_month`; Trend thêm `window_months`, Distribution thêm `bins`.
-Khi đổi bộ lọc, request cũ được hủy và kết quả cũ bị ẩn cho tới khi request mới hoàn tất.
-HTTP 401 yêu cầu đăng nhập lại; HTTP 503 hiển thị lỗi dịch vụ và nút thử lại, không tính thay bằng dữ liệu local.
-
-Chạy Analysis Service tại cổng 8101 bên cạnh Gateway cổng 8000. Hai tiến trình phải dùng cùng
-`ANALYSIS_SERVICE_SECRET` trong `.env` gốc. Tại thư mục `BE`, sau khi kích hoạt `.venv`:
+## Chạy frontend
 
 ```powershell
-python -m uvicorn service_apps.analysis.main:app --host 127.0.0.1 --port 8101 --env-file ..\.env
+cd FE
+npm install
 ```
 
-Backend hiện trả Pearson cho ba biến `demand`, `previous_month`, `previous_year`; frontend không hiển thị
-Spearman như kết quả API. Điểm scatter được ghép từ dữ liệu nguồn trong đúng khoảng lọc vì endpoint chỉ
-trả ma trận và số cặp. Các phép gộp tháng/quý/năm, tổng và so sánh cùng kỳ là phép trình bày từ chuỗi API.
-Dashboard Overview là thống kê toàn kho, không nhận bộ lọc thời gian; phần này được ghi nhãn riêng.
+Cấu hình `FE/.env.local` (không commit):
 
-Kiểm tra phần kết nối mới:
+```dotenv
+NEXT_PUBLIC_API_URL=http://localhost:8001
+```
 
 ```powershell
-node --test src/lib/analysis-data.test.mjs src/lib/demand-api.test.mjs src/lib/analytics-api.test.mjs
+npm run dev
 ```
 
-Trang `/` và ba trang phân tích sử dụng `GET /api/electricity/demand` từ FastAPI.
-Nguồn dữ liệu là PostgreSQL đã import dataset của dự án; cần chạy Gateway và Analysis Service để tải đầy đủ biểu đồ.
-Cấu hình `NEXT_PUBLIC_API_URL=http://localhost:8000` trong `.env.local`.
-Xem [hướng dẫn API và chạy hai ứng dụng](../docs/api-documentation.md).
+Mở `http://localhost:3000`. Đăng nhập bằng tài khoản Admin hoặc Analyst đã có trên Gateway.
+Cookie HttpOnly được gửi bằng `credentials: "include"`; không lưu JWT/mật khẩu trong localStorage.
+Khi chạy local, hostname API theo `localhost`/`127.0.0.1` của trình duyệt để cookie cùng site; cổng giữ nguyên 8001.
 
-- Bộ lọc từ tháng/đến tháng, 12 tháng gần nhất, năm dữ liệu mới nhất và toàn bộ.
-- KPI được tính lại theo khoảng lọc: tháng cuối kỳ, tổng, trung bình và tháng cao nhất.
-- Biểu đồ lịch sử có so sánh cùng kỳ, thống kê theo tháng trong năm và phân bố mức tiêu thụ.
-- Bảng hỗ trợ tìm tháng, lọc mức tiêu thụ, sắp xếp, phân trang và xuất CSV toàn bộ kết quả lọc.
-- Bộ lọc riêng của bảng không thay đổi KPI hay biểu đồ; nút đặt lại Dashboard khôi phục tất cả bộ lọc.
-- Liên kết đến Consumption Analysis, Trend & Seasonality và Correlation.
-- Có trạng thái tải, khoảng lọc không hợp lệ, không có kết quả và trang xử lý lỗi.
+## Màn hình và hợp đồng API
 
-MoM/YoY tra đúng tháng lịch sử trước khi lọc; giá trị thiếu hoặc mẫu số bằng 0 được hiển thị là dấu `—`.
-Nhãn mức tiêu thụ trong bảng dùng các ngưỡng cố định 21/27 TWh. Biểu đồ phân bố dùng histogram từ API, chưa phải K-Means.
-Chưa có API mô hình dự báo, vì vậy Dashboard không hiển thị chuỗi dự báo mẫu.
-Có trạng thái tải API, lỗi/thử lại, dữ liệu rỗng và nút tải lại dữ liệu; không tự chuyển sang dữ liệu mẫu.
+| Màn hình | API Gateway | Quyền |
+|---|---|---|
+| Login, đăng xuất, phiên | `/api/auth/login`, `/logout`, `/me` | Tài khoản đang hoạt động |
+| Dashboard | `/api/dashboard/overview`, `/api/electricity/demand`, `/api/prediction/latest` | Admin/Analyst |
+| Consumption / histogram | `/api/analysis/summary`, `/distribution`, dữ liệu demand phân trang | Admin/Analyst |
+| Trend / Seasonality | `/api/analysis/trend`, `/seasonality` | Admin/Analyst |
+| Correlation | `/api/analysis/correlation` | Admin/Analyst |
+| Clustering | `/api/clustering/train`, `/run`, `/latest`, `/runs`, `/runs/{id}` | Train/run: Admin; đọc: cả hai |
+| Prediction | `/api/prediction/train`, `/run`, `/latest`, `/runs`, `/runs/{id}` | Train/run: Admin; đọc: cả hai |
+| Classification | `/api/classification/train`, `/run`, `/latest`, `/runs`, `/runs/{id}` | Train/run: Admin; đọc: cả hai |
+| Ingestion | `/api/datasets`, `/upload`, `/{id}/import`, `/{id}/history`, `/sync`, `/sync/status` | Upload/import/sync: Admin; đọc: cả hai |
+| Settings | `/api/health/ready`, phiên hiện tại, `/api/users`, `/{id}`, `/{id}/status` | Quản lý tài khoản: Admin |
 
-Kiểm tra trước khi bàn giao:
+Backend quyết định quyền cuối cùng; frontend ẩn thao tác ghi với Analyst và xử lý HTTP 403.
+Khi HTTP 401 hoặc hết phiên, giao diện quay về đăng nhập và bỏ nội dung đã bảo vệ.
+Settings có form tạo Analyst; không có tài khoản hay mật khẩu mặc định trong code.
 
-```bash
-node --test src/lib/analysis-data.test.mjs src/lib/demand-api.test.mjs
+Phân tích gửi `start_month`, `end_month`, Trend thêm `window_months`, Distribution thêm `bins`.
+Dashboard Overview là thống kê toàn kho, có nhãn riêng; các thẻ/biểu đồ theo khoảng lọc dùng API Analysis.
+Correlation hiển thị Pearson do API cung cấp, không giả lập Spearman. Scatter ghép từ chuỗi API trong cùng khoảng lọc.
+Histogram từ API khác với nhãn ngưỡng 21/27 TWh trong bảng; không gán nhãn K-Means cho histogram.
+Mô hình có hai nút riêng: huấn luyện tạo artifact, chạy chỉ dùng artifact hiện có. Không tự train khi mở trang hoặc khi API trả lỗi.
+Gateway chỉ hỗ trợ `max_k` (2–8) cho Clustering, không nhận lựa chọn K cố định hay horizon tùy ý; UI tuân thủ đúng contract.
+
+## Dữ liệu và trạng thái
+
+Upload hỗ trợ CSV qua multipart với `file`, `name`, `source`, `description` tùy chọn. Không đặt Content-Type thủ công cho multipart.
+File được Gateway/Ingestion Service validate; import là thao tác riêng. Lịch sử có số dòng thêm/cập nhật/bỏ qua/lỗi.
+CSV nguồn của dự án ở `data/processed/vietnam_electricity_demand.csv` có thể dùng để kiểm tra.
+Không tự import, train, sync hoặc tạo tài khoản khi mở trang. Các thao tác ghi có nút riêng, khóa khi đang xử lý và không tự retry.
+Nếu request ghi hết thời gian chờ, tải lại lịch sử trước khi thao tác lần nữa vì server có thể vẫn hoàn tất.
+
+Có loading, lỗi/thử lại, empty, phân trang, tìm kiếm, trạng thái quyền; bảng cuộn ngang trên màn hình hẹp.
+Settings chỉ hiển thị thông tin Gateway/DB mà API cung cấp; không cho sửa secret hoặc cấu hình Docker từ trình duyệt.
+
+## Kiểm tra cục bộ
+
+```powershell
+npm test
+npm run lint
 npm run build
 ```
 
-Chạy `npm run dev`, mở `http://localhost:3000` để kiểm tra giao diện. Thử đổi khoảng tháng,
-bật/tắt so sánh cùng kỳ, nhập khoảng không có dữ liệu, lọc bảng, chuyển trang và tải CSV.
+Tests dùng fixture chỉ trong kiểm thử; không có mock fallback trong các luồng ứng dụng.
+Các kiểm tra contract có thể đọc schema/thuật toán BE trực tiếp mà không mở kết nối DB.
+Không chạy bộ test backend tạo/xóa bảng trong quá trình bàn giao frontend.
 
----
+## Kiểm thử HTTP thật qua Gateway
 
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+Gateway/Docker Compose và database cần đang chạy sẵn theo cấu hình đội backend. Script không khởi động/sửa container, volume hay schema.
+Tại thư mục FE:
 
-## Getting Started
-
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```powershell
+..\BE\.venv\Scripts\python.exe scripts/gateway-e2e.py --exercise-writes
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Script hỏi email/mật khẩu Admin và Analyst cục bộ (ẩn mật khẩu), tạo Analyst qua API nếu chưa có;
+upload/import CSV thật của dự án, train/run ba mô hình, kiểm tra kết quả/lịch sử và quyền 403 của Analyst.
+Chế độ này ghi tài khoản/dataset/lịch sử/model artifacts qua API; không xóa dữ liệu hoặc volume.
+Đối với Analyst đã tồn tại phải cung cấp đúng mật khẩu, script không tự đổi/reset mật khẩu.
+Bỏ `--exercise-writes` nếu chỉ kiểm tra các luồng đọc và đăng nhập Admin.
+Report ở `FE/test-results/gateway-e2e.json`, không chứa mật khẩu/cookie, được Git bỏ qua.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Kiểm thử trình duyệt thật
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Cài dependency kiểm thử trên máy có kết nối npm:
 
-## Learn More
+```powershell
+npm install --save-dev @playwright/test
+npx playwright install chromium
+```
 
-To learn more about Next.js, take a look at the following resources:
+Giữ frontend và Gateway chạy. Tại FE:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```powershell
+..\BE\.venv\Scripts\python.exe scripts/browser-e2e.py --exercise-writes
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Suite không dùng route mock: đăng nhập, Dashboard, biểu đồ/bộ lọc/CSV, tạo Analyst qua Settings,
+upload/import/validation CSV, train/run/history ba mô hình, đăng xuất, kiểm tra Analyst và viewport mobile.
+Trace/video tắt để không lưu request đăng nhập; kết quả và ảnh lỗi chỉ ở `FE/test-results/` (ignored).
+Không coi tests fixture/schema là thay thế cho nghiệm thu E2E trên hệ thống đang chạy.
 
-## Deploy on Vercel
+## Data Management và Model Management
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **Data Management:** `/ingestion` (hoặc `/data-management`, tự chuyển hướng). Danh sách dataset, tìm kiếm/phân trang, chi tiết file/nguồn/mô tả/số dòng/khoảng thời gian; upload CSV, import, lịch sử và đồng bộ theo quyền Admin/Analyst.
+- **Model Management:** `/models`. Lịch sử chung từ `GET /api/model-runs`, lọc `model_type`, `status`, `order`, `page`, `page_size`; xem chi tiết từ `GET /api/model-runs/{run_id}`, xuất CSV của trang hiện tại. Có liên kết đến ba trang mô hình.
+- **Clustering / Prediction / Classification:** `/clustering`, `/prediction`, `/classification`. Các trang dùng Gateway `/api/{kind}/train`, `/run`, `/latest`, `/runs`, `/runs/{id}`. Chỉ Clustering training gửi `max_k` (2–8); Prediction/Classification dùng cấu hình hiện có của Backend. Admin huấn luyện/chạy, Analyst chỉ xem.
+- Contract Backend hiện không có API sửa/xóa dataset hoặc xóa model artifact, nên giao diện không cung cấp các thao tác đó.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Kiểm tra nhanh: đăng nhập Admin, mở Data Management và chọn **Chi tiết & lịch sử**; mở từng mô hình, huấn luyện rồi chạy; mở Model Management để lọc và xem lượt vừa tạo. Đăng nhập Analyst và kiểm tra quyền xem, không có nút ghi dữ liệu/chạy mô hình. Scripts HTTP và browser đã có kiểm tra chi tiết dataset, lịch sử tổng hợp và quyền Analyst.
