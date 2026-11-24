@@ -2,7 +2,6 @@ import * as React from "react";
 import { LucideIcon, Sparkles } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 
 interface SectionPlaceholderProps {
   title: string;
@@ -60,36 +59,6 @@ export function SectionPlaceholder({
         </CardContent>
       </Card>
 
-      {/* Skeleton Mockup for this Module */}
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, idx) => (
-            <Card key={idx} className="p-4 border border-border/60">
-              <Skeleton className="h-4 w-28 mb-3" />
-              <Skeleton className="h-8 w-20 mb-2" />
-              <Skeleton className="h-3 w-36" />
-            </Card>
-          ))}
-        </div>
-
-        <Card className="p-6 border border-border/60">
-          <Skeleton className="h-5 w-48 mb-2" />
-          <Skeleton className="h-3.5 w-80 mb-6" />
-          <div className="h-64 w-full flex items-end gap-3 pb-2 border-b border-border/40">
-            {Array.from({ length: 14 }).map((_, idx) => (
-              <div key={idx} className="flex-1 flex flex-col justify-end items-center gap-1.5 h-full">
-                <Skeleton
-                  className="w-full rounded-t-sm"
-                  style={{
-                    height: `${30 + ((idx * 23) % 60)}%`,
-                  }}
-                />
-                <Skeleton className="h-2 w-full max-w-[24px]" />
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }

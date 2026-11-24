@@ -6,6 +6,7 @@ import { DemandLogin } from "./demand-login";
 import { DashboardSkeleton } from "./dashboard-skeleton";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Database, RefreshCw } from "lucide-react";
 
 type LoadState = { status: "loading" } | { status: "error"; message: string; httpStatus?: number } | { status: "success"; data: DemandDataset };
 const Context = createContext<{ state: LoadState; reload: () => void } | null>(null);
@@ -43,8 +44,12 @@ export function DemandDataGate({ children }: { children: (data: DemandDataset) =
 
 export function DataSourceStatus({ data }: { data: DemandDataset }) {
   const { reload } = useDemandData();
-  return <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
-    <p className="min-w-0 break-words"><strong>Dữ liệu từ API.</strong> {data.total} tháng ({data.start_month} – {data.end_month}) · {data.iso3} · {data.unit}. Nguồn: {data.source}.</p>
-    <Button variant="outline" onClick={reload}>Tải lại từ API</Button>
+  const monthLabel = (month: string | null) => month ? month.split("-").reverse().join("/") : "—";
+  return <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+      <p className="inline-flex flex-wrap items-center gap-2 py-1"><Database className="size-3.5 text-primary" /><span><strong className="font-semibold text-foreground">{data.total} tháng</strong> · {monthLabel(data.start_month)}–{monthLabel(data.end_month)} · {data.unit}</span></p>
+      <details className="min-w-0"><summary className="cursor-pointer py-1 hover:text-foreground">Chi tiết nguồn</summary><p className="max-w-lg break-words pb-1">{data.iso3} · Nguồn: {data.source}</p></details>
+    </div>
+    <Button variant="ghost" size="sm" onClick={reload}><RefreshCw className="size-3.5" />Tải lại từ API</Button>
   </div>;
 }

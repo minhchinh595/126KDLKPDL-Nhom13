@@ -7,6 +7,7 @@ import { DemandLogin } from "@/components/dashboard/demand-login";
 import { useDemandData } from "@/components/dashboard/demand-data-provider";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { LoaderCircle, CircleAlert } from "lucide-react";
 
 type Result<T> = { key: string; status: "success"; data: T } | { key: string; status: "error"; error: unknown };
 export function ApiResult<T>({ endpoint, params = {}, parse, children }: { endpoint: AnalyticsEndpoint; params?: AnalyticsParams; parse: (input: unknown) => T; children: (data: T) => ReactNode }) {
@@ -25,8 +26,8 @@ export function ApiResult<T>({ endpoint, params = {}, parse, children }: { endpo
     });
     return () => controller.abort();
   }, [endpoint, path, key, parse]);
-  if (!state || state.key !== key) return <Card className="p-6 animate-pulse" role="status">Đang tải kết quả phân tích…</Card>;
+  if (!state || state.key !== key) return <Card className="p-6 flex-row items-center justify-center gap-2 bg-muted/40 text-sm text-muted-foreground" role="status"><LoaderCircle className="size-4 animate-spin" />Đang tải kết quả phân tích…</Card>;
   if (state.status === "success") return children(state.data);
   if (state.error instanceof DemandApiError && state.error.status === 401) return <DemandLogin onSuccess={reload} />;
-  return <Card className="p-5 gap-3" role="alert"><h2 className="font-semibold">Không tải được kết quả phân tích</h2><p className="text-sm text-muted-foreground">{state.error instanceof Error ? state.error.message : "Có lỗi khi gọi API."}</p><Button variant="outline" onClick={() => setAttempt(n => n + 1)}>Thử lại</Button></Card>;
+  return <Card className="p-5 gap-3 border-destructive/20 bg-destructive/5" role="alert"><CircleAlert className="size-5 text-destructive" /><h2 className="font-semibold">Không tải được kết quả phân tích</h2><p className="text-sm text-muted-foreground">{state.error instanceof Error ? state.error.message : "Có lỗi khi gọi API."}</p><Button variant="outline" onClick={() => setAttempt(n => n + 1)}>Thử lại</Button></Card>;
 }

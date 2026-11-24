@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PageHeading } from "@/components/shared/page-heading";
 import Link from "next/link";
 import { Activity, ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Flame, RotateCcw, Search, SlidersHorizontal, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import { DEMAND_LEVELS, filterDemand, monthlyChanges, summarizeDemand } from "@/
 
 import { ApiResult } from "@/components/analysis/api-result";
 import { parseDashboard, parseSummary, rangeParams, type DashboardResult } from "@/lib/analytics-api";
+
+import { ForecastPreview } from "@/components/models/model-workspace";
 
 const csvHeaders = ["Tháng", "Quốc gia", "Tiêu thụ (TWh)", "MoM (%)", "YoY (%)", "Mức tiêu thụ"];
 const percent = (value: number | null) => value === null ? "—" : `${value > 0 ? "+" : ""}${format(value)}%`;
@@ -46,37 +49,21 @@ function OverviewContent({ dataset, overview }: { dataset: DemandDataset; overvi
   function tableReset() { setSearch(""); setLevel("all"); setSort("newest"); setPage(1); }
 
 
-  return <div className="space-y-6 min-w-0">
-    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 border-b border-border pb-5">
-      <div className="space-y-2">
-        <p className="text-xs uppercase tracking-wider font-semibold text-amber-600">Electricity Analytics · Việt Nam</p>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Overview Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Theo dõi tiêu thụ điện, xu hướng và các giai đoạn cao điểm trong một màn hình.</p>
-      </div>
-      <Button variant="outline" onClick={reset}><RotateCcw /> Đặt lại Dashboard</Button>
-    </div>
+  return <div className="space-y-4 min-w-0">
+    <PageHeading compact title="Overview Dashboard" icon={Zap} eyebrow="Tổng quan · Việt Nam" description="Theo dõi tiêu thụ điện, xu hướng và dự báo từ dữ liệu thực tế." actions={<Button variant="outline" onClick={reset}><RotateCcw /> Đặt lại Dashboard</Button>} />
 
     <DataSourceStatus data={dataset} />
-    <Panel title="Tổng quan toàn bộ kho dữ liệu" description="Số liệu từ API Dashboard, độc lập với bộ lọc lịch sử bên dưới.">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-        <p><strong>{overview.record_count}</strong> tháng dữ liệu · {overview.start_month} – {overview.latest_month}</p>
-        <p><strong>{overview.dataset_count}</strong> dataset · <strong>{overview.model_run_count}</strong> lượt chạy mô hình</p>
-        <p>Cập nhật: {overview.data_updated_at ? new Date(overview.data_updated_at).toLocaleString("vi-VN") : "Chưa có thời gian cập nhật"}</p>
-      </div>
-      <p className="text-sm text-muted-foreground">Tháng mới nhất: {format(overview.latest_demand_twh)} TWh · MoM: {percent(overview.change_from_previous_month_pct)}.</p>
-    </Panel>
-
-    <Card className="p-4 gap-4">
-      <div className="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal className="size-4" /> Bộ lọc Dashboard</div>
+    <Card className="p-3 gap-2">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="space-y-1 text-sm"><span className="block">Từ tháng</span><Input className="w-44" type="month" aria-label="Từ tháng" min={first} max={last} value={start} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(e.target.value, end)} /></label>
-        <label className="space-y-1 text-sm"><span className="block">Đến tháng</span><Input className="w-44" type="month" aria-label="Đến tháng" min={first} max={last} value={end} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(start, e.target.value)} /></label>
+        <div className="flex items-center gap-2 self-center text-sm font-semibold lg:mr-2"><SlidersHorizontal className="size-4" /> Bộ lọc Dashboard</div>
+        <label className="space-y-1 text-sm"><span className="block">Từ tháng</span><Input className="h-9 w-40" type="month" aria-label="Từ tháng" min={first} max={last} value={start} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(e.target.value, end)} /></label>
+        <label className="space-y-1 text-sm"><span className="block">Đến tháng</span><Input className="h-9 w-40" type="month" aria-label="Đến tháng" min={first} max={last} value={end} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(start, e.target.value)} /></label>
         <Button variant="outline" onClick={() => range(dataset.records[Math.max(0, dataset.records.length - 12)]?.month ?? first, last)}>12 tháng gần nhất</Button>
         <Button variant="outline" onClick={() => range(`${last.slice(0, 4)}-01`, last)}>Năm dữ liệu mới nhất</Button>
         <Button variant="ghost" onClick={() => range(first, last)}>Toàn bộ</Button>
       </div>
       {invalid && <p id="overview-range-error" role="alert" className="text-sm text-destructive">Chọn đủ hai mốc thời gian, tháng bắt đầu phải trước hoặc bằng tháng kết thúc.</p>}
-      <p role="status" className="text-xs text-muted-foreground">{points.length} tháng được chọn · KPI, biểu đồ lịch sử và bảng dữ liệu dùng chung khoảng lọc.</p>
+      <p role="status" className="text-xs text-muted-foreground">{points.length} tháng được chọn · KPI, biểu đồ và bảng cập nhật theo khoảng lọc.</p>
     </Card>
 
     {!points.length ? <Card className="p-8 items-center text-center gap-3"><CalendarDays className="size-8 text-muted-foreground" /><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Dữ liệu hiện có từ {first} đến {last}.</p><Button onClick={reset}>Khôi phục toàn bộ dữ liệu</Button></Card> : <ApiResult endpoint="/api/analysis/summary" params={rangeParams(points)} parse={parseSummary}>{analysis => <>
@@ -92,6 +79,16 @@ function OverviewContent({ dataset, overview }: { dataset: DemandDataset; overvi
         <OverviewTrendChart points={points} all={dataset.records} compare={compare} />
         <Link href="/analysis/consumption" className={detailLink}>Mở Consumption Analysis <ArrowRight className="size-3" /></Link>
       </Panel>
+
+      <details className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm">
+        <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">Thông tin kho dữ liệu · {overview.dataset_count} dataset · {overview.model_run_count} lượt chạy mô hình</summary>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 pb-1 text-xs text-muted-foreground">
+          <p>{overview.record_count} tháng · {overview.start_month}–{overview.latest_month}</p>
+          <p>Cập nhật: {overview.data_updated_at ? new Date(overview.data_updated_at).toLocaleString("vi-VN") : "Chưa có thời gian cập nhật"}</p>
+          <p>Tháng mới nhất: {format(overview.latest_demand_twh)} TWh · MoM: {percent(overview.change_from_previous_month_pct)}</p>
+          <p>Thông tin toàn bộ kho dữ liệu, độc lập với bộ lọc.</p>
+        </div>
+      </details>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <Panel title="Quy luật tiêu thụ theo tháng" description="Trung bình các tháng cùng tên trong khoảng lọc; chưa điều chỉnh xu hướng giữa các năm.">
@@ -129,9 +126,7 @@ function OverviewContent({ dataset, overview }: { dataset: DemandDataset; overvi
       </Panel>
     </>}</ApiResult>}
 
-    <Panel title="Dự báo nhu cầu" description="Chưa tích hợp kết quả dự báo vào Dashboard.">
-      <p className="text-sm text-muted-foreground">Các biểu đồ lịch sử đã nối API dữ liệu và phân tích. Kết quả mô hình dự báo sẽ được tích hợp riêng; hiện không hiển thị chuỗi dự báo mẫu.</p>
-    </Panel>
+    <Panel title="Dự báo nhu cầu mới nhất" description="Kết quả mô hình được lưu trên Gateway, độc lập với bộ lọc lịch sử."><ForecastPreview /></Panel>
   </div>;
 }
 

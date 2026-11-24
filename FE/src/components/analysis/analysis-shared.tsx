@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { ChartNoAxesCombined } from "lucide-react";
+import { PageHeading } from "@/components/shared/page-heading";
 import Link from "next/link";
 import { Download, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { AppLayout } from "@/components/layout/app-layout";
@@ -34,11 +36,7 @@ function AnalysisContent({ kind, children, dataset }: {
   function reset() { setStart(first); setEnd(last); }
   return <>
     <div className="space-y-6 min-w-0">
-      <div className="space-y-2 border-b border-border pb-5">
-        <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">Phân tích điện năng · Việt Nam</p>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{tab.title}</h1>
-        <p className="text-sm text-muted-foreground">{tab.description}</p>
-      </div>
+      <PageHeading title={tab.title} description={tab.description} icon={ChartNoAxesCombined} eyebrow="Phân tích dữ liệu · Việt Nam" />
       <nav aria-label="Các trang phân tích" className="flex flex-wrap gap-2">
         {tabs.map(t => <Link key={t.key} href={`/analysis/${t.key}`} aria-current={t.key === kind ? "page" : undefined}
           className={`rounded-lg border px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring ${t.key === kind ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
@@ -70,17 +68,17 @@ export function Selector({ label, value, onChange, options }: { label: string; v
   return <label className="space-y-1 text-sm"><span className="block text-muted-foreground">{label}</span><NativeSelect aria-label={label} value={value} onChange={e => onChange(e.target.value)}>{options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</NativeSelect></label>;
 }
 export function Panel({ title, description, children, actions }: { title: string; description?: string; children: ReactNode; actions?: ReactNode }) {
-  return <Card className="p-4 sm:p-5 min-w-0 gap-4"><div className="flex flex-wrap justify-between items-start gap-3"><div className="space-y-1"><h2 className="font-semibold">{title}</h2>{description && <p className="text-xs text-muted-foreground">{description}</p>}</div>{actions}</div>{children}</Card>;
+  return <Card className="p-4 sm:p-6 min-w-0 gap-5"><div className="flex flex-wrap justify-between items-start gap-3"><div className="space-y-1"><h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>{description && <p className="text-xs text-muted-foreground">{description}</p>}</div>{actions}</div>{children}</Card>;
 }
 export function ChartFrame({ children, label }: { children: ReactNode; label: string }) {
   const mounted = useIsMounted();
-  return <div role="img" aria-label={label} className="h-80 w-full min-w-0">{mounted ? children : <div role="status" className="h-full animate-pulse rounded-lg bg-muted flex items-center justify-center text-sm text-muted-foreground">Đang khởi tạo biểu đồ…</div>}</div>;
+  return <div role="img" aria-label={label} className="h-64 sm:h-80 w-full min-w-0">{mounted ? children : <div role="status" className="h-full animate-pulse rounded-lg bg-muted flex items-center justify-center text-sm text-muted-foreground">Đang khởi tạo biểu đồ…</div>}</div>;
 }
 export function Stat({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <Card className="p-4 gap-2"><p className="text-xs text-muted-foreground">{label}</p><p className="text-2xl font-bold tabular-nums">{value}</p><p className="text-xs text-muted-foreground">{detail}</p></Card>;
+  return <Card className="p-5 gap-2 border-t-2 border-t-primary/40"><p className="text-xs text-muted-foreground">{label}</p><p className="text-2xl font-bold tabular-nums">{value}</p><p className="text-xs text-muted-foreground">{detail}</p></Card>;
 }
 export function DataTable({ headers, rows, caption }: { headers: string[]; rows: ReactNode[][]; caption: string }) {
-  return <div className="max-h-96 overflow-auto rounded-lg border border-border"><table className="w-full text-sm whitespace-nowrap"><caption className="sr-only">{caption}</caption><thead className="sticky top-0 bg-card"><tr>{headers.map(h => <th key={h} scope="col" className="px-4 py-3 text-left font-medium text-muted-foreground border-b border-border">{h}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/40">{row.map((cell, j) => <td key={j} className="px-4 py-2.5 tabular-nums">{cell}</td>)}</tr>)}</tbody></table></div>;
+  return <div tabIndex={0} role="region" aria-label={caption} className="max-h-[32rem] w-full min-w-0 overflow-auto rounded-xl border border-border focus-visible:outline-2 focus-visible:outline-ring"><table className="w-full text-sm whitespace-nowrap"><caption className="sr-only">{caption}</caption><thead className="sticky top-0 z-10 bg-muted"><tr>{headers.map(h => <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground border-b border-border">{h}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className="border-b border-border last:border-0 even:bg-muted/20 hover:bg-primary/5 transition-colors">{row.map((cell, j) => <td key={j} className="px-4 py-3 tabular-nums">{cell}</td>)}</tr>)}</tbody></table></div>;
 }
 export function ExportCsv({ filename, headers, rows }: { filename: string; headers: string[]; rows: (string | number | null)[][] }) {
   function download() {

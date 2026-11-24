@@ -16,15 +16,21 @@ import { Badge } from "@/components/ui/badge";
 import { Database, ExternalLink, Zap } from "lucide-react";
 import { checkBackend } from "@/lib/api";
 
+import { AccountMenu } from "@/components/auth/account-menu";
+
 const ROUTE_LABELS: Record<string, string> = {
+  "/models": "Model Management",
+  "/data-management": "Data Management",
   "/analysis/consumption": "Consumption Analysis",
   "/analysis/trend": "Trend & Seasonality",
   "/analysis/correlation": "Correlation",
   "/": "Tổng quan Dashboard",
-  "/ingestion": "Dữ liệu & Thu thập",
+  "/ingestion": "Data Management",
   "/analysis": "Quy luật Tiêu thụ",
   "/clustering": "Phân cụm Nhu cầu",
   "/prediction": "Dự đoán Nhu cầu",
+  "/classification": "Phân loại tiêu thụ",
+  "/login": "Tài khoản",
   "/settings": "Cấu hình Hệ thống",
 };
 
@@ -48,7 +54,7 @@ export function AppHeader() {
   }, [pathname]);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 backdrop-blur-md">
+    <><a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Đi đến nội dung chính</a><header className="sticky top-0 z-30 flex min-h-16 flex-wrap shrink-0 items-center justify-between gap-3 py-2 border-b border-border bg-background/95 px-4 backdrop-blur-md">
       {/* Left: Sidebar trigger & Breadcrumb */}
       <div className="flex items-center gap-3 min-w-0">
         <SidebarTrigger className="-ml-1" />
@@ -70,8 +76,8 @@ export function AppHeader() {
         </Breadcrumb>
       </div>
 
-      {/* Right: Quick Scope Badges, Backend Status & Actions */}
-      <div className="flex items-center gap-2.5">
+      {/* Account and Gateway status */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
         {/* Scope Pills */}
         <div className="hidden lg:flex items-center gap-1.5">
           <Badge variant="outline" className="gap-1 px-2 py-0.5 text-[11px] font-normal border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300">
@@ -104,9 +110,10 @@ export function AppHeader() {
           </span>
         </div>
 
+        <AccountMenu />
         {/* Quick Docs Link */}
         <a
-          href="http://localhost:8000/docs"
+          href="http://localhost:8001/docs"
           target="_blank"
           rel="noopener noreferrer"
           title="Mở FastAPI Swagger Docs"
@@ -116,6 +123,6 @@ export function AppHeader() {
           <ExternalLink className="size-3 text-muted-foreground" />
         </a>
       </div>
-    </header>
+    </header></>
   );
 }
