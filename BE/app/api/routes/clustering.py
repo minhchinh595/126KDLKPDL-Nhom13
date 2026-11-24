@@ -5,7 +5,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.clustering.kmeans import ArtifactCompatibilityError, build_clustering_result, train_and_save_model
+from app.clients.clustering import (
+    ClusteringServiceConflict,
+    ClusteringServiceRejected,
+    ClusteringServiceUnavailable,
+    clustering_service_client,
+)
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption, ModelRun
 from app.api.dependencies import require_admin, require_analyst
@@ -55,6 +60,21 @@ def _serialize_run(run: ModelRun) -> dict:
     }
 
 
+def _save_failed_training(db: Session, *, started_at: datetime, error: str) -> None:
+    db.add(ModelRun(
+        model_type="clustering",
+        status="failed",
+        started_at=started_at,
+        completed_at=datetime.now(timezone.utc),
+        parameters={"stage": "training"},
+        error_message=error[:2000],
+    ))
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+
+
 @router.post("/clustering/train", response_model=ModelRunPublic)
 def train_clustering_model(
     max_k: int = Query(default=5, ge=2, le=8),
@@ -63,7 +83,8 @@ def train_clustering_model(
 ):
     started_at = datetime.now(timezone.utc)
     try:
-        result = train_and_save_model(_load_demand_records(db), max_k=max_k)
+        records = _load_demand_records(db)
+        result = clustering_service_client.train(records, max_k=max_k)
         run = ModelRun(
             model_type="clustering", status="completed", started_at=started_at,
             completed_at=datetime.now(timezone.utc),
@@ -73,25 +94,25 @@ def train_clustering_model(
         db.commit()
         db.refresh(run)
         return _serialize_run(run)
-    except ValueError as exc:
+    except ClusteringServiceRejected as exc:
         db.rollback()
-        failed = ModelRun(model_type="clustering", status="failed", started_at=started_at,
-                          completed_at=datetime.now(timezone.utc), parameters={"stage": "training"},
-                          error_message=str(exc)[:2000])
-        db.add(failed)
-        db.commit()
+        _save_failed_training(db, started_at=started_at, error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except OSError as exc:
+    except ClusteringServiceConflict as exc:
         db.rollback()
-        failed = ModelRun(model_type="clustering", status="failed", started_at=started_at,
-                          completed_at=datetime.now(timezone.utc), parameters={"stage": "training"},
-                          error_message="Could not save the clustering model artifact")
-        db.add(failed)
-        db.commit()
-        raise HTTPException(status_code=500, detail="Could not save the clustering model artifact") from exc
+        _save_failed_training(db, started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ClusteringServiceUnavailable as exc:
+        db.rollback()
+        _save_failed_training(db, started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=503, detail="Clustering Service is unavailable") from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="Clustering data or run history is unavailable in PostgreSQL") from exc
+    except Exception as exc:
+        db.rollback()
+        _save_failed_training(db, started_at=started_at, error="Unexpected Clustering Service error")
+        raise HTTPException(status_code=500, detail="Clustering training could not be completed") from exc
 
 
 @router.post("/clustering/run", response_model=ModelRunPublic)
@@ -113,7 +134,7 @@ def run_clustering(
         db.flush()
 
         records = _load_demand_records(db)
-        result = build_clustering_result(records)
+        result = clustering_service_client.run(records)
 
         run.status = "completed"
         run.metrics = result
@@ -123,7 +144,7 @@ def run_clustering(
         db.refresh(run)
         return _serialize_run(run)
 
-    except ArtifactCompatibilityError as exc:
+    except ClusteringServiceConflict as exc:
         run.status = "failed"
         run.error_message = str(exc)
         run.completed_at = datetime.now(timezone.utc)
@@ -133,19 +154,17 @@ def run_clustering(
             db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    except ValueError as exc:
+    except ClusteringServiceRejected as exc:
         run.status = "failed"
         run.error_message = str(exc)
         run.completed_at = datetime.now(timezone.utc)
-
         try:
             db.commit()
         except SQLAlchemyError:
             db.rollback()
-
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    except FileNotFoundError as exc:
+    except ClusteringServiceUnavailable as exc:
         run.status = "failed"
         run.error_message = str(exc)
         run.completed_at = datetime.now(timezone.utc)
@@ -153,7 +172,7 @@ def run_clustering(
             db.commit()
         except SQLAlchemyError:
             db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Clustering Service is unavailable") from exc
 
     except SQLAlchemyError as exc:
         db.rollback()
