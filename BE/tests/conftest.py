@@ -56,6 +56,14 @@ def client(test_engine, monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     from app.api.routes import datasets
+    from app.clients.ingestion import NormalizedCSV
+    from app.ingestion.pipeline import normalize_csv
+
+    monkeypatch.setattr(
+        datasets.ingestion_service_client,
+        "normalize",
+        lambda content: NormalizedCSV(**normalize_csv(content)),
+    )
     uploads = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1])
     monkeypatch.setattr(datasets, "UPLOAD_DIR", Path(uploads.name))
     with TestClient(app) as test_client:

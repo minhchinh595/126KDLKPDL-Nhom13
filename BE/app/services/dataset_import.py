@@ -6,16 +6,23 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.db.models import Dataset, DatasetImport, ElectricityConsumption
-from scripts.import_electricity_data import load_rows
 
 
-def import_dataset_file(db: Session, dataset: Dataset, file_path: Path, mode: str) -> DatasetImport:
+def import_dataset_file(
+    db: Session,
+    dataset: Dataset,
+    file_path: Path,
+    mode: str,
+    *,
+    normalized_rows: list[dict],
+) -> DatasetImport:
     history = DatasetImport(dataset_id=dataset.id, mode=mode, status="running")
     db.add(history)
     db.commit()
     db.refresh(history)
     try:
-        rows = load_rows(file_path)
+        # CSV parsing is delegated to Ingestion Service before this DB transaction.
+        rows = normalized_rows
         keys = [(row["country_id"], row["month"], row["metric"], row["fuel"] or "") for row in rows]
         existing_rows = db.execute(
             select(ElectricityConsumption).where(

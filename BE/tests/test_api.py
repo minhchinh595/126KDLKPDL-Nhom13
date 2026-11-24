@@ -74,6 +74,8 @@ def test_cors_allows_credentialed_frontend_requests(client):
 def test_unauthenticated_routes_reject_requests(client):
     assert client.get("/api/analysis/summary").status_code == 401
     assert client.get("/api/users").status_code == 401
+    assert client.get("/api/datasets").status_code == 401
+    assert client.post("/api/datasets/sync").status_code == 401
     assert client.post("/api/prediction/train").status_code == 401
 
 
@@ -97,12 +99,25 @@ def test_admin_user_management_and_last_admin_protection(client, admin):
     assert client.patch(f"/api/users/{admin.id}/status", json={"is_active": False}).status_code == 409
 
 
-def test_analyst_can_read_but_cannot_manage_or_run(client, analyst):
+def test_analyst_can_read_but_cannot_manage_or_run(client, analyst, db_session):
+    dataset = Dataset(name="analyst-readable", source="fixture", file_name="read.csv")
+    db_session.add(dataset)
+    db_session.commit()
     login_analyst(client, analyst)
     assert client.get("/api/dashboard/overview").status_code == 200
     assert client.get("/api/reports/summary").status_code == 200
     assert client.get("/api/users").status_code == 403
-    assert client.get("/api/datasets").status_code == 403
+    assert client.get("/api/datasets").status_code == 200
+    assert client.get(f"/api/datasets/{dataset.id}").status_code == 200
+    assert client.get(f"/api/datasets/{dataset.id}/history").status_code == 200
+    assert client.get("/api/datasets/sync/status").status_code == 200
+    assert client.post(
+        "/api/datasets/upload",
+        data={"name": "analyst-upload", "source": "fixture"},
+        files={"file": ("data.csv", make_csv())},
+    ).status_code == 403
+    assert client.post(f"/api/datasets/{dataset.id}/import").status_code == 403
+    assert client.post("/api/datasets/sync").status_code == 403
     assert client.post("/api/clustering/run").status_code == 403
     assert client.post("/api/prediction/train").status_code == 403
     assert client.post("/api/classification/run").status_code == 403
@@ -110,8 +125,17 @@ def test_analyst_can_read_but_cannot_manage_or_run(client, analyst):
     assert client.post("/api/clustering/train").status_code == 403
 
 
-def test_upload_validation_import_history_and_idempotency(client, admin):
+def test_upload_validation_import_history_and_idempotency(client, admin, monkeypatch):
+    from app.api.routes import datasets as dataset_routes
+
     login_admin(client, admin)
+    calls = []
+    normalize = dataset_routes.ingestion_service_client.normalize
+    monkeypatch.setattr(
+        dataset_routes.ingestion_service_client,
+        "normalize",
+        lambda content: (calls.append(len(content)) or normalize(content)),
+    )
     invalid = client.post("/api/datasets/upload", data={"name": "bad", "source": "test"}, files={"file": ("bad.csv", b"not,a,valid,schema\n1,2,3,4")})
     assert invalid.status_code == 422
     uploaded = client.post("/api/datasets/upload", data={"name": "test-demand", "source": "fixture"}, files={"file": ("demand.csv", make_csv())})
@@ -124,6 +148,7 @@ def test_upload_validation_import_history_and_idempotency(client, admin):
     assert repeated.json()["history"]["skipped_count"] == 1
     assert client.get(f"/api/datasets/{dataset_id}/history").json().__len__() == 2
     assert client.get("/api/datasets").json()["total"] == 1
+    assert len(calls) == 4  # Invalid upload, valid upload, and two imports all delegate.
 
 
 def test_electricity_pagination_detail_statistics_and_export(client, analyst, db_session):
@@ -208,6 +233,45 @@ def test_sync_status_is_configurable_and_safe(client, admin, monkeypatch):
     monkeypatch.delenv("DATASET_SYNC_URL", raising=False)
     assert client.get("/api/datasets/sync/status").json()["configured"] is False
     assert client.post("/api/datasets/sync").status_code == 503
+
+
+def test_dataset_sync_normalizes_through_ingestion_client_and_imports(client, admin, monkeypatch):
+    from app.api.routes import datasets as dataset_routes
+
+    class RemoteCSV:
+        headers = {"Content-Type": "text/csv; charset=utf-8"}
+
+        def __init__(self):
+            self.sent = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            if self.sent:
+                return b""
+            self.sent = True
+            return make_csv()
+
+    calls = []
+    normalize = dataset_routes.ingestion_service_client.normalize
+    monkeypatch.setattr(dataset_routes, "urlopen", lambda *_args, **_kwargs: RemoteCSV())
+    monkeypatch.setenv("DATASET_SYNC_URL", "https://data.example.test/monthly.csv")
+    monkeypatch.setattr(
+        dataset_routes.ingestion_service_client,
+        "normalize",
+        lambda content: (calls.append(len(content)) or normalize(content)),
+    )
+    login_admin(client, admin)
+
+    response = client.post("/api/datasets/sync")
+    assert response.status_code == 200, response.text
+    assert response.json()["history"]["rows_read"] == 1
+    assert calls and calls[0] > 0
+    assert client.get("/api/electricity/demand").json()["total_matches"] == 1
 
 
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):
