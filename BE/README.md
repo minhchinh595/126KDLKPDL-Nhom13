@@ -93,6 +93,34 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file 
 
 Check service health at `http://127.0.0.1:8102/health`. Its internal endpoints are `POST /internal/clustering/train` and `POST /internal/clustering/run`; they are not public browser APIs. The Gateway's public train/run routes remain documented at `http://127.0.0.1:8000/docs` and require an Admin cookie. Train is the only operation that fits or writes the K-Means artifact. Run loads the artifact and returns conflict when it is absent, incompatible, stale, or built from a different monthly dataset. Both processes must resolve the same `CLUSTERING_MODEL_PATH`; if unset in local development, the existing `BE/artifacts/electricity_demand_kmeans.joblib` default is used. No training runs at service startup.
 
+## Prediction Service (independent process)
+
+The Gateway keeps the public `/api/prediction/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the separate Prediction Service over HTTP. The service has no database connection and directly reuses `app/prediction/model.py`.
+
+Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Prediction Service:
+
+```dotenv
+PREDICTION_SERVICE_URL=http://127.0.0.1:8103
+PREDICTION_SERVICE_SECRET=<private-random-secret-at-least-32-bytes>
+PREDICTION_SERVICE_TIMEOUT_SECONDS=120
+```
+
+Run the Prediction Service in its own terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn service_apps.prediction.main:app --host 127.0.0.1 --port 8103 --env-file ..\.env
+```
+
+Run the Gateway in another terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
+```
+
+Check health at `http://127.0.0.1:8103/health`. Internal endpoints are `POST /internal/prediction/train` and `POST /internal/prediction/run`; they are not public browser APIs. Public train/run routes require an Admin cookie. Train explicitly fits and saves the Random Forest artifact; Run only loads the existing artifact and predicts, and the service does not train at startup. Both processes must resolve the same `PREDICTION_MODEL_PATH` (default `BE/artifacts/electricity_demand_rf.joblib`). Keep that artifact on persistent shared storage when using separate containers.
+
 ## First administrator
 
 Create an admin interactively. The password is prompted without echo and is Argon2-hashed; the command only succeeds when there is no active admin yet.

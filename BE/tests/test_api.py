@@ -212,6 +212,12 @@ def test_sync_status_is_configurable_and_safe(client, admin, monkeypatch):
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):
     from app.clustering import kmeans as clustering_model
     from app.api.routes import clustering as clustering_routes
+    from app.api.routes import prediction as prediction_routes
+    from app.clients.prediction import (
+        PredictionServiceConflict,
+        PredictionServiceRejected,
+        PredictionServiceUnavailable,
+    )
     from app.clients.clustering import (
         ClusteringServiceConflict,
         ClusteringServiceRejected,
@@ -221,6 +227,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
     from app.classification import model as classification_model
     from fastapi.testclient import TestClient as ServiceTestClient
     from service_apps.clustering.main import app as clustering_service_app
+    from service_apps.prediction.main import app as prediction_service_app
 
     root = Path(__file__).resolve().parents[2]
     csv_path = root / "data" / "processed" / "vietnam_electricity_demand.csv"
@@ -237,6 +244,9 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         secret = "clustering-integration-test-secret-at-least-32-bytes"
         monkeypatch.setenv("CLUSTERING_SERVICE_SECRET", secret)
         service_client = ServiceTestClient(clustering_service_app)
+        prediction_secret = "prediction-integration-test-secret-at-least-32-bytes"
+        monkeypatch.setenv("PREDICTION_SERVICE_SECRET", prediction_secret)
+        prediction_internal_client = ServiceTestClient(prediction_service_app)
 
         def call_clustering_service(operation, payload):
             response = service_client.post(
@@ -259,6 +269,32 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
             lambda records, max_k=5: call_clustering_service(
                 "train", {"records": records, "max_k": max_k}
             ),
+        )
+
+        def call_prediction_service(operation, records):
+            response = prediction_internal_client.post(
+                f"/internal/prediction/{operation}",
+                json={"records": records},
+                headers={"X-Prediction-Service-Secret": prediction_secret},
+            )
+            if response.status_code == 409:
+                raise PredictionServiceConflict(response.json()["detail"])
+            if response.status_code == 422:
+                raise PredictionServiceRejected(response.json()["detail"])
+            if response.status_code >= 500:
+                raise PredictionServiceUnavailable("Prediction Service is unavailable")
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        monkeypatch.setattr(
+            prediction_routes.prediction_service_client,
+            "train",
+            lambda records: call_prediction_service("train", records),
+        )
+        monkeypatch.setattr(
+            prediction_routes.prediction_service_client,
+            "run",
+            lambda records: call_prediction_service("run", records),
         )
         monkeypatch.setattr(
             clustering_routes.clustering_service_client,
