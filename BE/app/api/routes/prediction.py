@@ -5,9 +5,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.clients.prediction import (
+    PredictionArtifactWriteError,
+    PredictionServiceConflict,
+    PredictionServiceRejected,
+    PredictionServiceUnavailable,
+    prediction_service_client,
+)
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption, ModelRun
-from app.prediction.model import forecast_next_month, train_and_save_model
 from app.api.dependencies import require_admin, require_analyst
 from fastapi import Query
 from sqlalchemy import func
@@ -103,7 +109,7 @@ def train_prediction_model(
 
     try:
         records = _load_demand_records(db)
-        result = train_and_save_model(records)
+        result = prediction_service_client.train(records)
         run = _save_run(
             db,
             stage="training",
@@ -112,10 +118,28 @@ def train_prediction_model(
         )
         return _serialize_run(run)
 
-    except ValueError as exc:
+    except PredictionServiceRejected as exc:
         db.rollback()
         _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    except PredictionServiceConflict as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PredictionArtifactWriteError as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save the prediction model artifact",
+        ) from exc
+
+    except PredictionServiceUnavailable as exc:
+        db.rollback()
+        _save_failed_run(db, stage="training", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=503, detail="Prediction Service is unavailable") from exc
 
     except SQLAlchemyError as exc:
         db.rollback()
@@ -123,15 +147,6 @@ def train_prediction_model(
             status_code=503,
             detail="Prediction data or run history is unavailable in PostgreSQL",
         ) from exc
-
-    except OSError as exc:
-        db.rollback()
-        _save_failed_run(db, stage="training", started_at=started_at, error="Could not save model artifact")
-        raise HTTPException(
-            status_code=500,
-            detail="Could not save the prediction model artifact",
-        ) from exc
-
 
 @router.post("/prediction/run", response_model=ModelRunPublic)
 def run_prediction(
@@ -142,7 +157,7 @@ def run_prediction(
 
     try:
         records = _load_demand_records(db)
-        result = forecast_next_month(records)
+        result = prediction_service_client.run(records)
         run = _save_run(
             db,
             stage="forecast",
@@ -151,15 +166,20 @@ def run_prediction(
         )
         return _serialize_run(run)
 
-    except FileNotFoundError as exc:
+    except PredictionServiceConflict as exc:
         db.rollback()
         _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    except ValueError as exc:
+    except PredictionServiceRejected as exc:
         db.rollback()
         _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    except PredictionServiceUnavailable as exc:
+        db.rollback()
+        _save_failed_run(db, stage="forecast", started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=503, detail="Prediction Service is unavailable") from exc
 
     except SQLAlchemyError as exc:
         db.rollback()

@@ -93,6 +93,62 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file 
 
 Check service health at `http://127.0.0.1:8102/health`. Its internal endpoints are `POST /internal/clustering/train` and `POST /internal/clustering/run`; they are not public browser APIs. The Gateway's public train/run routes remain documented at `http://127.0.0.1:8000/docs` and require an Admin cookie. Train is the only operation that fits or writes the K-Means artifact. Run loads the artifact and returns conflict when it is absent, incompatible, stale, or built from a different monthly dataset. Both processes must resolve the same `CLUSTERING_MODEL_PATH`; if unset in local development, the existing `BE/artifacts/electricity_demand_kmeans.joblib` default is used. No training runs at service startup.
 
+## Prediction Service (independent process)
+
+The Gateway keeps the public `/api/prediction/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the separate Prediction Service over HTTP. The service has no database connection and directly reuses `app/prediction/model.py`.
+
+Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Prediction Service:
+
+```dotenv
+PREDICTION_SERVICE_URL=http://127.0.0.1:8103
+PREDICTION_SERVICE_SECRET=<private-random-secret-at-least-32-bytes>
+PREDICTION_SERVICE_TIMEOUT_SECONDS=120
+```
+
+Run the Prediction Service in its own terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn service_apps.prediction.main:app --host 127.0.0.1 --port 8103 --env-file ..\.env
+```
+
+Run the Gateway in another terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
+```
+
+Check health at `http://127.0.0.1:8103/health`. Internal endpoints are `POST /internal/prediction/train` and `POST /internal/prediction/run`; they are not public browser APIs. Public train/run routes require an Admin cookie. Train explicitly fits and saves the Random Forest artifact; Run only loads the existing artifact and predicts, and the service does not train at startup. Both processes must resolve the same `PREDICTION_MODEL_PATH` (default `BE/artifacts/electricity_demand_rf.joblib`). Keep that artifact on persistent shared storage when using separate containers.
+
+## Classification Service (independent process)
+
+The Gateway retains the public `/api/classification/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the Classification Service over HTTP. The service has no database connection and directly reuses `app/classification/model.py`.
+
+Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Classification Service:
+
+```dotenv
+CLASSIFICATION_SERVICE_URL=http://127.0.0.1:8104
+CLASSIFICATION_SERVICE_SECRET=<private-random-secret-at-least-32-bytes>
+CLASSIFICATION_SERVICE_TIMEOUT_SECONDS=120
+```
+
+Run the Classification Service in its own terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn service_apps.classification.main:app --host 127.0.0.1 --port 8104 --env-file ..\.env
+```
+
+Run the Gateway in another terminal from `BE`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
+```
+
+Check health at `http://127.0.0.1:8104/health`. Internal endpoints are `POST /internal/classification/train` and `POST /internal/classification/run`; they are not public browser APIs. Public Train and Run require an Admin cookie; Analysts can read latest and run history. Train explicitly fits and writes the Random Forest artifact. Run only loads the saved classifier and predicts, with no training at service startup or on Run failure. The service uses `CLASSIFICATION_MODEL_PATH` (default `BE/artifacts/electricity_demand_classifier.joblib`); the Gateway does not access the artifact. Mount the existing file at that path and keep it on persistent storage when using a separate container. Public endpoints remain available through the Backend Swagger page at `http://127.0.0.1:8000/docs`.
+
 ## First administrator
 
 Create an admin interactively. The password is prompted without echo and is Argon2-hashed; the command only succeeds when there is no active admin yet.
@@ -146,6 +202,8 @@ curl.exe -X POST http://127.0.0.1:8000/api/datasets/upload `
 Upload validates CSV columns, monthly dates, numeric values, allowed VNM demand/TWh records, duplicates and the configured size limit. It stores a UUID-named file under ignored `BE/uploads/`. Import is a separate request to `POST /api/datasets/{dataset_id}/import`; PostgreSQL upserts are idempotent and import counts are recorded in `dataset_imports`.
 
 Optional sync accepts an HTTPS `DATASET_SYNC_URL` in `.env`. The URL must return a CSV in the same normalized project format; configure the source outside code, then call `POST /api/datasets/sync`. `GET /api/datasets/sync/status` reports the latest attempt. A failed fetch/validation is recorded and does not delete existing consumption rows. No periodic scheduler is enabled; the service can be called by an external scheduler.
+
+Dataset CSV parsing and normalization run in the standalone Ingestion Service on port `8105`. Start it from `BE` with `python -m uvicorn service_apps.ingestion.main:app --host 127.0.0.1 --port 8105 --env-file ..\.env`. Configure `INGESTION_SERVICE_URL`, `INGESTION_SERVICE_SECRET` (at least 32 bytes, shared only with the Gateway), and `INGESTION_SERVICE_TIMEOUT_SECONDS` in that environment file. The service has no PostgreSQL connection; the Gateway validates roles and owns dataset metadata, import history, and all database transactions. Dataset GET endpoints are available to Admin and Analyst; upload, import, and sync remain Admin-only.
 
 ## Model artifacts and demo run order
 

@@ -74,6 +74,8 @@ def test_cors_allows_credentialed_frontend_requests(client):
 def test_unauthenticated_routes_reject_requests(client):
     assert client.get("/api/analysis/summary").status_code == 401
     assert client.get("/api/users").status_code == 401
+    assert client.get("/api/datasets").status_code == 401
+    assert client.post("/api/datasets/sync").status_code == 401
     assert client.post("/api/prediction/train").status_code == 401
 
 
@@ -97,20 +99,43 @@ def test_admin_user_management_and_last_admin_protection(client, admin):
     assert client.patch(f"/api/users/{admin.id}/status", json={"is_active": False}).status_code == 409
 
 
-def test_analyst_can_read_but_cannot_manage_or_run(client, analyst):
+def test_analyst_can_read_but_cannot_manage_or_run(client, analyst, db_session):
+    dataset = Dataset(name="analyst-readable", source="fixture", file_name="read.csv")
+    db_session.add(dataset)
+    db_session.commit()
     login_analyst(client, analyst)
     assert client.get("/api/dashboard/overview").status_code == 200
     assert client.get("/api/reports/summary").status_code == 200
     assert client.get("/api/users").status_code == 403
-    assert client.get("/api/datasets").status_code == 403
+    assert client.get("/api/datasets").status_code == 200
+    assert client.get(f"/api/datasets/{dataset.id}").status_code == 200
+    assert client.get(f"/api/datasets/{dataset.id}/history").status_code == 200
+    assert client.get("/api/datasets/sync/status").status_code == 200
+    assert client.post(
+        "/api/datasets/upload",
+        data={"name": "analyst-upload", "source": "fixture"},
+        files={"file": ("data.csv", make_csv())},
+    ).status_code == 403
+    assert client.post(f"/api/datasets/{dataset.id}/import").status_code == 403
+    assert client.post("/api/datasets/sync").status_code == 403
     assert client.post("/api/clustering/run").status_code == 403
     assert client.post("/api/prediction/train").status_code == 403
     assert client.post("/api/classification/run").status_code == 403
+    assert client.post("/api/classification/train").status_code == 403
     assert client.post("/api/clustering/train").status_code == 403
 
 
-def test_upload_validation_import_history_and_idempotency(client, admin):
+def test_upload_validation_import_history_and_idempotency(client, admin, monkeypatch):
+    from app.api.routes import datasets as dataset_routes
+
     login_admin(client, admin)
+    calls = []
+    normalize = dataset_routes.ingestion_service_client.normalize
+    monkeypatch.setattr(
+        dataset_routes.ingestion_service_client,
+        "normalize",
+        lambda content: (calls.append(len(content)) or normalize(content)),
+    )
     invalid = client.post("/api/datasets/upload", data={"name": "bad", "source": "test"}, files={"file": ("bad.csv", b"not,a,valid,schema\n1,2,3,4")})
     assert invalid.status_code == 422
     uploaded = client.post("/api/datasets/upload", data={"name": "test-demand", "source": "fixture"}, files={"file": ("demand.csv", make_csv())})
@@ -123,6 +148,7 @@ def test_upload_validation_import_history_and_idempotency(client, admin):
     assert repeated.json()["history"]["skipped_count"] == 1
     assert client.get(f"/api/datasets/{dataset_id}/history").json().__len__() == 2
     assert client.get("/api/datasets").json()["total"] == 1
+    assert len(calls) == 4  # Invalid upload, valid upload, and two imports all delegate.
 
 
 def test_electricity_pagination_detail_statistics_and_export(client, analyst, db_session):
@@ -209,9 +235,62 @@ def test_sync_status_is_configurable_and_safe(client, admin, monkeypatch):
     assert client.post("/api/datasets/sync").status_code == 503
 
 
+def test_dataset_sync_normalizes_through_ingestion_client_and_imports(client, admin, monkeypatch):
+    from app.api.routes import datasets as dataset_routes
+
+    class RemoteCSV:
+        headers = {"Content-Type": "text/csv; charset=utf-8"}
+
+        def __init__(self):
+            self.sent = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            if self.sent:
+                return b""
+            self.sent = True
+            return make_csv()
+
+    calls = []
+    normalize = dataset_routes.ingestion_service_client.normalize
+    monkeypatch.setattr(dataset_routes, "urlopen", lambda *_args, **_kwargs: RemoteCSV())
+    monkeypatch.setenv("DATASET_SYNC_URL", "https://data.example.test/monthly.csv")
+    monkeypatch.setattr(
+        dataset_routes.ingestion_service_client,
+        "normalize",
+        lambda content: (calls.append(len(content)) or normalize(content)),
+    )
+    login_admin(client, admin)
+
+    response = client.post("/api/datasets/sync")
+    assert response.status_code == 200, response.text
+    assert response.json()["history"]["rows_read"] == 1
+    assert calls and calls[0] > 0
+    assert client.get("/api/electricity/demand").json()["total_matches"] == 1
+
+
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):
     from app.clustering import kmeans as clustering_model
     from app.api.routes import clustering as clustering_routes
+    from app.api.routes import prediction as prediction_routes
+    from app.api.routes import classification as classification_routes
+    from app.clients.prediction import (
+        PredictionServiceConflict,
+        PredictionServiceRejected,
+        PredictionServiceUnavailable,
+    )
+    from app.clients.classification import (
+        ClassificationArtifactWriteError,
+        ClassificationServiceConflict,
+        ClassificationServiceError,
+        ClassificationServiceRejected,
+        ClassificationServiceUnavailable,
+    )
     from app.clients.clustering import (
         ClusteringServiceConflict,
         ClusteringServiceRejected,
@@ -221,6 +300,8 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
     from app.classification import model as classification_model
     from fastapi.testclient import TestClient as ServiceTestClient
     from service_apps.clustering.main import app as clustering_service_app
+    from service_apps.prediction.main import app as prediction_service_app
+    from service_apps.classification.main import app as classification_service_app
 
     root = Path(__file__).resolve().parents[2]
     csv_path = root / "data" / "processed" / "vietnam_electricity_demand.csv"
@@ -237,6 +318,12 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         secret = "clustering-integration-test-secret-at-least-32-bytes"
         monkeypatch.setenv("CLUSTERING_SERVICE_SECRET", secret)
         service_client = ServiceTestClient(clustering_service_app)
+        prediction_secret = "prediction-integration-test-secret-at-least-32-bytes"
+        monkeypatch.setenv("PREDICTION_SERVICE_SECRET", prediction_secret)
+        prediction_internal_client = ServiceTestClient(prediction_service_app)
+        classification_secret = "classification-integration-test-secret-at-least-32-bytes"
+        monkeypatch.setenv("CLASSIFICATION_SERVICE_SECRET", classification_secret)
+        classification_internal_client = ServiceTestClient(classification_service_app)
 
         def call_clustering_service(operation, payload):
             response = service_client.post(
@@ -259,6 +346,62 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
             lambda records, max_k=5: call_clustering_service(
                 "train", {"records": records, "max_k": max_k}
             ),
+        )
+
+        def call_prediction_service(operation, records):
+            response = prediction_internal_client.post(
+                f"/internal/prediction/{operation}",
+                json={"records": records},
+                headers={"X-Prediction-Service-Secret": prediction_secret},
+            )
+            if response.status_code == 409:
+                raise PredictionServiceConflict(response.json()["detail"])
+            if response.status_code == 422:
+                raise PredictionServiceRejected(response.json()["detail"])
+            if response.status_code >= 500:
+                raise PredictionServiceUnavailable("Prediction Service is unavailable")
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        monkeypatch.setattr(
+            prediction_routes.prediction_service_client,
+            "train",
+            lambda records: call_prediction_service("train", records),
+        )
+        monkeypatch.setattr(
+            prediction_routes.prediction_service_client,
+            "run",
+            lambda records: call_prediction_service("run", records),
+        )
+
+        def call_classification_service(operation, records):
+            response = classification_internal_client.post(
+                f"/internal/classification/{operation}",
+                json={"records": records},
+                headers={"X-Classification-Service-Secret": classification_secret},
+            )
+            if response.status_code == 409:
+                raise ClassificationServiceConflict(response.json()["detail"])
+            if response.status_code == 422:
+                raise ClassificationServiceRejected(response.json()["detail"])
+            if response.status_code == 507:
+                raise ClassificationArtifactWriteError(response.json()["detail"])
+            if response.status_code == 500:
+                raise ClassificationServiceError("Classification Service failed")
+            if response.status_code >= 500:
+                raise ClassificationServiceUnavailable("Classification Service is unavailable")
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        monkeypatch.setattr(
+            classification_routes.classification_service_client,
+            "train",
+            lambda records: call_classification_service("train", records),
+        )
+        monkeypatch.setattr(
+            classification_routes.classification_service_client,
+            "run",
+            lambda records: call_classification_service("run", records),
         )
         monkeypatch.setattr(
             clustering_routes.clustering_service_client,
@@ -287,6 +430,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert client.get("/api/prediction/latest").json()["metrics"]["forecast_month"] == "2026-10"
         assert client.get("/api/prediction/runs").json()["total"] == 2
 
+        assert client.post("/api/classification/run").status_code == 409
         classification_train = client.post("/api/classification/train")
         assert classification_train.status_code == 200, classification_train.text
         assert classification_train.json()["metrics"]["holdout_metrics"]["confusion_matrix"]["labels"] == ["low", "medium", "high"]
@@ -294,18 +438,32 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert classification.status_code == 200, classification.text
         assert classification.json()["metrics"]["forecast_month"] == "2026-10"
         assert client.get("/api/classification/latest").json()["metrics"]["forecast_month"] == "2026-10"
-        assert client.get("/api/classification/runs").json()["total"] == 2
+        assert client.get("/api/classification/runs").json()["total"] == 3
 
 
 def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, monkeypatch):
     from app.api.routes import clustering as clustering_routes
     from app.clients.clustering import ClusteringServiceRejected
+    from app.api.routes import prediction as prediction_routes
+    from app.api.routes import classification as classification_routes
+    from app.clients.prediction import PredictionServiceRejected
+    from app.clients.classification import ClassificationServiceRejected
 
     def reject_empty_records(*_args, **_kwargs):
         raise ClusteringServiceRejected("At least four months of monthly history are required")
 
+    def reject_prediction_records(*_args, **_kwargs):
+        raise PredictionServiceRejected("At least four months of monthly history are required")
+
+    def reject_classification_records(*_args, **_kwargs):
+        raise ClassificationServiceRejected("At least four months of monthly history are required")
+
     monkeypatch.setattr(clustering_routes.clustering_service_client, "train", reject_empty_records)
     monkeypatch.setattr(clustering_routes.clustering_service_client, "run", reject_empty_records)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "train", reject_prediction_records)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "run", reject_prediction_records)
+    monkeypatch.setattr(classification_routes.classification_service_client, "train", reject_classification_records)
+    monkeypatch.setattr(classification_routes.classification_service_client, "run", reject_classification_records)
     login_admin(client, admin)
     assert client.post("/api/clustering/run").status_code == 422
     assert client.post("/api/prediction/train").status_code == 422

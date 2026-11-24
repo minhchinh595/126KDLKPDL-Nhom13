@@ -12,14 +12,20 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import require_admin
+from app.api.dependencies import require_admin, require_analyst
+from app.clients.ingestion import (
+    IngestionFileTooLarge,
+    IngestionServiceRejected,
+    IngestionServiceUnavailable,
+    NormalizedCSV,
+    ingestion_service_client,
+)
 from app.db.database import get_db
 from app.db.models import Dataset, DatasetImport
 from app.schemas.datasets import DatasetListResponse, DatasetPublic, ImportHistoryPublic, ImportResult, SyncStatus
 from app.services.dataset_import import import_dataset_file
-from scripts.import_electricity_data import load_rows
 
-router = APIRouter(prefix="/datasets", dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/datasets", dependencies=[Depends(require_analyst)])
 MAX_UPLOAD_BYTES = int(os.getenv("DATASET_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 UPLOAD_DIR = Path(os.getenv("DATASET_UPLOAD_DIR", str(Path(__file__).resolve().parents[3] / "uploads"))).resolve()
 
@@ -31,6 +37,33 @@ def _safe_storage_path(key: str) -> Path:
     if path.parent != UPLOAD_DIR:
         raise HTTPException(status_code=404, detail="Uploaded dataset file was not found")
     return path
+
+
+def _normalize_file(path: Path) -> NormalizedCSV:
+    try:
+        return ingestion_service_client.normalize(path.read_bytes())
+    except IngestionServiceRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IngestionFileTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except IngestionServiceUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Ingestion Service is unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _record_failed_import(db: Session, dataset: Dataset, mode: str, error: str) -> None:
+    db.add(DatasetImport(
+        dataset_id=dataset.id,
+        mode=mode,
+        status="failed",
+        error_count=1,
+        error_message=error[:2000],
+        completed_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
 
 
 @router.get("", response_model=DatasetListResponse)
@@ -71,7 +104,7 @@ def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
     return dataset
 
 
-@router.post("/upload", response_model=DatasetPublic, status_code=201)
+@router.post("/upload", response_model=DatasetPublic, status_code=201, dependencies=[Depends(require_admin)])
 async def upload_dataset(
     file: UploadFile = File(...), name: str = Form(min_length=2, max_length=160),
     source: str = Form(min_length=2, max_length=255), description: str | None = Form(None),
@@ -90,7 +123,7 @@ async def upload_dataset(
                 if total > MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="CSV exceeds the upload size limit")
                 destination.write(chunk)
-        load_rows(path)
+        _normalize_file(path)
     except HTTPException:
         path.unlink(missing_ok=True)
         raise
@@ -111,7 +144,7 @@ async def upload_dataset(
     return dataset
 
 
-@router.post("/{dataset_id}/import", response_model=ImportResult)
+@router.post("/{dataset_id}/import", response_model=ImportResult, dependencies=[Depends(require_admin)])
 def import_dataset(dataset_id: int, db: Session = Depends(get_db)):
     dataset = db.get(Dataset, dataset_id)
     if dataset is None:
@@ -120,13 +153,20 @@ def import_dataset(dataset_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="This dataset has no uploaded CSV file")
     path = _safe_storage_path(dataset.storage_key)
     try:
-        history = import_dataset_file(db, dataset, path, "upload")
+        normalized = _normalize_file(path)
+    except HTTPException as exc:
+        _record_failed_import(db, dataset, "upload", str(exc.detail))
+        raise
+    try:
+        history = import_dataset_file(
+            db, dataset, path, "upload", normalized_rows=normalized.rows
+        )
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"dataset": dataset, "history": history}
 
 
-@router.post("/sync", response_model=ImportResult)
+@router.post("/sync", response_model=ImportResult, dependencies=[Depends(require_admin)])
 def sync_dataset(db: Session = Depends(get_db)):
     source_url = os.getenv("DATASET_SYNC_URL", "").strip()
     if not source_url:
@@ -153,22 +193,34 @@ def sync_dataset(db: Session = Depends(get_db)):
                 if total > MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="Remote CSV exceeds the size limit")
                 destination.write(chunk)
-        rows = load_rows(path)
     except HTTPException:
         path.unlink(missing_ok=True)
         raise
     except (URLError, TimeoutError, OSError, ValueError) as exc:
         path.unlink(missing_ok=True)
-        history = DatasetImport(
-            dataset_id=dataset.id, mode="sync", status="failed", error_count=1,
-            error_message=str(exc)[:2000], completed_at=datetime.now(timezone.utc),
-        )
         dataset.status = "sync_failed"
-        db.add(history)
-        db.commit()
+        _record_failed_import(db, dataset, "sync", str(exc))
         raise HTTPException(status_code=502, detail="Dataset source could not be fetched or validated") from exc
+
+    try:
+        normalized = _normalize_file(path)
+    except HTTPException as exc:
+        path.unlink(missing_ok=True)
+        if exc.status_code == 422:
+            dataset.status = "sync_failed"
+            _record_failed_import(db, dataset, "sync", str(exc.detail))
+            raise HTTPException(
+                status_code=502,
+                detail="Dataset source could not be fetched or validated",
+            ) from exc
+        raise
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     dataset.storage_key = key
     db.commit()
     db.refresh(dataset)
-    history = import_dataset_file(db, dataset, path, "sync")
+    history = import_dataset_file(
+        db, dataset, path, "sync", normalized_rows=normalized.rows
+    )
     return {"dataset": dataset, "history": history}
