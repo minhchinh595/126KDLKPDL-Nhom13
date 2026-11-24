@@ -1,12 +1,13 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { fetchDemandDataset, type DemandDataset } from "@/lib/demand-api";
+import { DemandApiError, fetchDemandDataset, type DemandDataset } from "@/lib/demand-api";
+import { DemandLogin } from "./demand-login";
 import { DashboardSkeleton } from "./dashboard-skeleton";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "success"; data: DemandDataset };
+type LoadState = { status: "loading" } | { status: "error"; message: string; httpStatus?: number } | { status: "success"; data: DemandDataset };
 const Context = createContext<{ state: LoadState; reload: () => void } | null>(null);
 
 export function DemandDataProvider({ children }: { children: ReactNode }) {
@@ -17,7 +18,7 @@ export function DemandDataProvider({ children }: { children: ReactNode }) {
     fetchDemandDataset({ signal: controller.signal }).then(data => {
       if (!controller.signal.aborted) setState({ status: "success", data });
     }).catch(error => {
-      if (!controller.signal.aborted) setState({ status: "error", message: error instanceof Error ? error.message : "Không tải được dữ liệu biểu đồ." });
+      if (!controller.signal.aborted) setState({ status: "error", httpStatus: error instanceof DemandApiError ? error.status : undefined, message: error instanceof Error ? error.message : "Không tải được dữ liệu biểu đồ." });
     });
     return () => controller.abort();
   }, [request]);
@@ -34,6 +35,7 @@ export function useDemandData() {
 export function DemandDataGate({ children }: { children: (data: DemandDataset) => ReactNode }) {
   const { state, reload } = useDemandData();
   if (state.status === "loading") return <div role="status" aria-label="Đang tải dữ liệu biểu đồ từ API"><DashboardSkeleton /></div>;
+  if (state.status === "error" && state.httpStatus === 401) return <DemandLogin onSuccess={reload} />;
   if (state.status === "error") return <Card className="p-6 space-y-3" role="alert"><h1 className="text-xl font-semibold">Không tải được dữ liệu biểu đồ</h1><p className="text-sm text-muted-foreground">{state.message}</p><Button onClick={reload}>Thử lại kết nối API</Button></Card>;
   if (!state.data.records.length) return <Card className="p-6 space-y-3" role="status"><h1 className="text-xl font-semibold">API chưa có dữ liệu tiêu thụ</h1><p className="text-sm text-muted-foreground">Nguồn: {state.data.source}. Hãy kiểm tra dataset trên backend.</p><Button onClick={reload}>Tải lại dữ liệu</Button></Card>;
   return children(state.data);

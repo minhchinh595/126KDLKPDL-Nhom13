@@ -2,12 +2,18 @@
 
 import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { aggregateDemand, mean, type DemandPoint, type Granularity } from "@/lib/analysis-data";
+import { aggregateDemand, type DemandPoint, type Granularity } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
+
+import { ApiResult } from "./api-result";
+import { DistributionApiChart } from "./api-charts";
+import { parseSummary, rangeParams } from "@/lib/analytics-api";
 
 const headers = ["Kỳ", "Số tháng", "Tổng (TWh)", "TB/tháng (TWh)", "Cùng kỳ (TWh)", "YoY (%)"];
 function ConsumptionView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
   const [group, setGroup] = useState<Granularity>("month");
+  return <ApiResult endpoint="/api/analysis/summary" params={rangeParams(points)} parse={parseSummary}>{summary => {
+  if (summary.count !== points.length) return <p role="alert" className="text-sm text-muted-foreground">Dữ liệu đã thay đổi. Hãy bấm Tải lại từ API để đồng bộ kết quả và dữ liệu nguồn.</p>;
   const data = aggregateDemand(points, all, group);
   const total = points.reduce((sum, p) => sum + p.value, 0);
   const peak = points.reduce((a, b) => a.value > b.value ? a : b);
@@ -15,9 +21,9 @@ function ConsumptionView({ points, all }: { points: DemandPoint[]; all: DemandPo
   return <>
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
       <Stat label="Tổng tiêu thụ" value={`${format(total)} TWh`} detail={`${points.length} tháng trong khoảng đã chọn`} />
-      <Stat label="Trung bình tháng" value={`${format(mean(points.map(p => p.value)))} TWh`} detail="Tính trên các tháng có dữ liệu" />
-      <Stat label="Tháng cao nhất" value={`${format(peak.value)} TWh`} detail={peak.month} />
-      <Stat label="Tháng thấp nhất" value={`${format(low.value)} TWh`} detail={low.month} />
+      <Stat label="Trung bình tháng" value={`${format(summary.mean)} TWh`} detail="Tính trên các tháng có dữ liệu" />
+      <Stat label="Tháng cao nhất" value={`${format(summary.max)} TWh`} detail={peak.month} />
+      <Stat label="Tháng thấp nhất" value={`${format(summary.min)} TWh`} detail={low.month} />
     </div>
     <Panel title="Tiêu thụ và so sánh cùng kỳ" description="Tổng điện năng theo kỳ. Đường nét đứt biểu diễn tổng của đúng các tháng tương ứng ở năm trước."
       actions={<Selector label="Gộp dữ liệu" value={group} onChange={v => setGroup(v as Granularity)} options={[{ value: "month", label: "Theo tháng" }, { value: "quarter", label: "Theo quý" }, { value: "year", label: "Theo năm" }]} />}>
@@ -37,7 +43,9 @@ function ConsumptionView({ points, all }: { points: DemandPoint[]; all: DemandPo
       actions={<ExportCsv filename={`consumption-${group}.csv`} headers={headers} rows={data.map(p => [p.period, p.count, p.total, p.average, p.previous, p.growth])} />}>
       <DataTable caption="Chi tiết tiêu thụ trong khoảng đã lọc" headers={headers} rows={data.map(p => [p.period, `${p.count} tháng`, format(p.total), format(p.average), format(p.previous), p.growth === null ? "—" : `${p.growth > 0 ? "+" : ""}${format(p.growth)}%`])} />
     </Panel>
+    <Panel title="Phân bố mức tiêu thụ" description="Histogram được tính bởi API phân tích theo khoảng thời gian đã chọn."><DistributionApiChart points={points} /></Panel>
   </>;
+  }}</ApiResult>;
 }
 export function ConsumptionAnalysis() {
   return <AnalysisWorkspace kind="consumption">{(points, all) => <ConsumptionView points={points} all={all} />}</AnalysisWorkspace>;

@@ -1,9 +1,57 @@
 # Electricity Analytics Frontend
 
+## Đăng nhập để tải dữ liệu
+
+Backend mới yêu cầu cookie đăng nhập cho API tiêu thụ. Khi nhận HTTP 401, Dashboard và các trang
+phân tích hiển thị form đăng nhập: nhập email/mật khẩu tài khoản Admin hoặc Analyst đã tạo trên backend.
+Đăng nhập thành công sẽ tải lại biểu đồ; không cần đăng nhập qua Swagger.
+
+Yêu cầu đăng nhập và dữ liệu đều dùng `credentials: "include"`, cookie do backend giữ ở chế độ HttpOnly.
+Frontend không lưu mật khẩu hoặc JWT vào localStorage. Cookie `SameSite=Lax` cần frontend và API cùng site:
+khi chạy local, client đồng bộ `localhost`/`127.0.0.1` với hostname trên thanh địa chỉ, giữ nguyên cổng API.
+Địa chỉ API từ xa không bị đổi. Các origin frontend vẫn phải được khai báo trong CORS backend.
+
+Client tải đủ các trang của API `/api/electricity/demand` trước khi tính KPI/biểu đồ để không mất lịch sử
+khi dataset vượt giới hạn một trang. HTTP 403 hiển thị lỗi quyền truy cập; HTTP 401 hiển thị form đăng nhập lại.
+
 ## Overview Dashboard
 
+### API đang được sử dụng
+
+| Màn hình | API |
+|---|---|
+| Toàn bộ chuỗi dữ liệu, bảng, so sánh cùng kỳ | `/api/electricity/demand` (đọc đủ phân trang) |
+| Thống kê toàn kho trên Dashboard | `/api/dashboard/overview` |
+| KPI theo khoảng lọc trên Dashboard và Consumption | `/api/analysis/summary` |
+| Đường trung bình trượt trên Dashboard và Trend | `/api/analysis/trend` |
+| Thống kê theo tháng trên Dashboard và Trend | `/api/analysis/seasonality` |
+| Hệ số và ma trận Pearson trên Correlation | `/api/analysis/correlation` |
+| Histogram trên Dashboard và Consumption | `/api/analysis/distribution` |
+
+Các API phân tích nhận `start_month`/`end_month`; Trend thêm `window_months`, Distribution thêm `bins`.
+Khi đổi bộ lọc, request cũ được hủy và kết quả cũ bị ẩn cho tới khi request mới hoàn tất.
+HTTP 401 yêu cầu đăng nhập lại; HTTP 503 hiển thị lỗi dịch vụ và nút thử lại, không tính thay bằng dữ liệu local.
+
+Chạy Analysis Service tại cổng 8101 bên cạnh Gateway cổng 8000. Hai tiến trình phải dùng cùng
+`ANALYSIS_SERVICE_SECRET` trong `.env` gốc. Tại thư mục `BE`, sau khi kích hoạt `.venv`:
+
+```powershell
+python -m uvicorn service_apps.analysis.main:app --host 127.0.0.1 --port 8101 --env-file ..\.env
+```
+
+Backend hiện trả Pearson cho ba biến `demand`, `previous_month`, `previous_year`; frontend không hiển thị
+Spearman như kết quả API. Điểm scatter được ghép từ dữ liệu nguồn trong đúng khoảng lọc vì endpoint chỉ
+trả ma trận và số cặp. Các phép gộp tháng/quý/năm, tổng và so sánh cùng kỳ là phép trình bày từ chuỗi API.
+Dashboard Overview là thống kê toàn kho, không nhận bộ lọc thời gian; phần này được ghi nhãn riêng.
+
+Kiểm tra phần kết nối mới:
+
+```powershell
+node --test src/lib/analysis-data.test.mjs src/lib/demand-api.test.mjs src/lib/analytics-api.test.mjs
+```
+
 Trang `/` và ba trang phân tích sử dụng `GET /api/electricity/demand` từ FastAPI.
-Nguồn dữ liệu là CSV đã xử lý trong dự án; cần chạy backend để tải biểu đồ.
+Nguồn dữ liệu là PostgreSQL đã import dataset của dự án; cần chạy Gateway và Analysis Service để tải đầy đủ biểu đồ.
 Cấu hình `NEXT_PUBLIC_API_URL=http://localhost:8000` trong `.env.local`.
 Xem [hướng dẫn API và chạy hai ứng dụng](../docs/api-documentation.md).
 
@@ -16,7 +64,7 @@ Xem [hướng dẫn API và chạy hai ứng dụng](../docs/api-documentation.m
 - Có trạng thái tải, khoảng lọc không hợp lệ, không có kết quả và trang xử lý lỗi.
 
 MoM/YoY tra đúng tháng lịch sử trước khi lọc; giá trị thiếu hoặc mẫu số bằng 0 được hiển thị là dấu `—`.
-Các mức dưới 21 TWh, từ 21 đến 27 TWh và trên 27 TWh là ngưỡng minh họa, chưa phải kết quả K-Means.
+Nhãn mức tiêu thụ trong bảng dùng các ngưỡng cố định 21/27 TWh. Biểu đồ phân bố dùng histogram từ API, chưa phải K-Means.
 Chưa có API mô hình dự báo, vì vậy Dashboard không hiển thị chuỗi dự báo mẫu.
 Có trạng thái tải API, lỗi/thử lại, dữ liệu rỗng và nút tải lại dữ liệu; không tự chuyển sang dữ liệu mẫu.
 

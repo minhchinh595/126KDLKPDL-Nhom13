@@ -2,59 +2,46 @@
 
 import { useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { mean, movingAverage, seasonalPattern, type DemandPoint } from "@/lib/analysis-data";
+import type { DemandPoint } from "@/lib/analysis-data";
+import { parseTrend, rangeParams } from "@/lib/analytics-api";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
+import { ApiResult } from "./api-result";
+import { SeasonalityApiChart } from "./api-charts";
 
-const headers = ["Tháng", "Số quan sát", "Trung bình (TWh)", "Thấp nhất (TWh)", "Cao nhất (TWh)"];
-const tooltipStyle = { background: "var(--card)", borderColor: "var(--border)", borderRadius: 8, color: "var(--foreground)" };
-function TrendView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
+function TrendView({ points }: { points: DemandPoint[] }) {
   const [window, setWindow] = useState(6);
-  const trend = movingAverage(points, all, window);
-  const seasonal = seasonalPattern(points);
-  const observed = seasonal.filter(p => p.average !== null);
-  const peak = observed.reduce((a, b) => a.average! > b.average! ? a : b);
-  const low = observed.reduce((a, b) => a.average! < b.average! ? a : b);
-  const average = mean(points.map(p => p.value))!;
-  const start = points[0], end = points[points.length - 1];
-  const change = points.length > 1 && start.value !== 0 ? (end.value / start.value - 1) * 100 : null;
   return <>
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-      <Stat label="Biến động đầu → cuối kỳ" value={change === null ? "—" : `${change > 0 ? "+" : ""}${format(change)}%`} detail={`${start.month} → ${end.month}; chưa điều chỉnh mùa vụ`} />
-      <Stat label="Tháng có TB cao nhất" value={peak.month} detail={`${format(peak.average)} TWh · ${peak.count} quan sát`} />
-      <Stat label="Tháng có TB thấp nhất" value={low.month} detail={`${format(low.average)} TWh · ${low.count} quan sát`} />
-      <Stat label="Chênh lệch đỉnh / đáy" value={`${format(peak.average! - low.average!)} TWh`} detail={average === 0 ? "Trung bình toàn kỳ bằng 0; không tính tỷ lệ" : `${format((peak.average! - low.average!) / average * 100)}% so với trung bình toàn kỳ`} />
-    </div>
-    <Panel title="Xu hướng và trung bình trượt" description="Trung bình trượt sử dụng cả các tháng trước khoảng lọc để đủ cửa sổ; không sử dụng dữ liệu tương lai."
-      actions={<Selector label="Cửa sổ trung bình trượt" value={String(window)} onChange={v => setWindow(Number(v))} options={[3, 6, 12].map(n => ({ value: String(n), label: `${n} tháng` }))} />}>
-      <ChartFrame label="Chuỗi tiêu thụ theo tháng và trung bình trượt">
-        <ResponsiveContainer width="100%" height="100%"><LineChart data={trend} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-          <XAxis dataKey="month" minTickGap={35} tick={{ fontSize: 11 }} /><YAxis width={60} tick={{ fontSize: 11 }} />
-          <Tooltip contentStyle={tooltipStyle} formatter={v => `${format(Number(v))} TWh`} /><Legend wrapperStyle={{ fontSize: 12 }} />
-          <Line dataKey="value" name="Tiêu thụ (TWh)" stroke="#94a3b8" strokeWidth={1.5} dot={points.length === 1} />
-          <Line dataKey="movingAverage" name={`Trung bình ${window} tháng (TWh)`} stroke="#f59e0b" strokeWidth={3} dot={points.length === 1} connectNulls={false} />
-        </LineChart></ResponsiveContainer>
-      </ChartFrame>
+    <Panel title="Xu hướng và trung bình trượt" description="Kết quả tính bởi Analysis Service. Cửa sổ chỉ dùng các tháng trong khoảng lọc; các tháng đầu chưa đủ lịch sử sẽ có dấu —."
+      actions={<Selector label="Cửa sổ trung bình trượt" value={String(window)} onChange={value => setWindow(Number(value))} options={[3, 6, 12].map(value => ({ value: String(value), label: `${value} tháng` }))} />}>
+      <ApiResult endpoint="/api/analysis/trend" params={{ ...rangeParams(points), window_months: window }} parse={parseTrend}>{result => {
+        const latest = result.records.at(-1);
+        const first = result.records[0];
+        const change = first && latest && first.value !== 0 && result.records.length > 1 ? (latest.value / first.value - 1) * 100 : null;
+        if (!latest) return <p role="status">Không có kết quả xu hướng trong khoảng đã chọn.</p>;
+        const headers = ["Tháng", "Tiêu thụ (TWh)", `MA${result.window_months} (TWh)`];
+        return <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Stat label="Tiêu thụ cuối kỳ" value={`${format(latest.value)} TWh`} detail={latest.month} />
+            <Stat label={`Trung bình trượt ${result.window_months} tháng`} value={format(latest.trend)} detail={latest.trend === null ? "Chưa đủ lịch sử trong khoảng lọc" : "TWh · trailing rolling mean"} />
+            <Stat label="Biến động đầu → cuối kỳ" value={change === null ? "—" : `${change > 0 ? "+" : ""}${format(change)}%`} detail="Từ chuỗi API; chưa điều chỉnh mùa vụ" />
+          </div>
+          <ChartFrame label="Chuỗi tiêu thụ và trung bình trượt từ API xu hướng">
+            <ResponsiveContainer width="100%" height="100%"><LineChart data={result.records} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" /><XAxis dataKey="month" minTickGap={35} tick={{ fontSize: 11 }} /><YAxis width={60} tick={{ fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", color: "var(--foreground)" }} formatter={value => `${format(Number(value))} TWh`} /><Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line dataKey="value" name="Tiêu thụ (TWh)" stroke="#94a3b8" strokeWidth={1.5} dot={result.records.length === 1} />
+              <Line dataKey="trend" name={`Trung bình ${result.window_months} tháng (TWh)`} stroke="#f59e0b" strokeWidth={3} dot={result.records.length === 1} connectNulls={false} />
+            </LineChart></ResponsiveContainer>
+          </ChartFrame>
+          <ExportCsv filename={`trend-ma${result.window_months}-api.csv`} headers={headers} rows={result.records.map(row => [row.month, row.value, row.trend])} />
+          <DataTable caption="Kết quả xu hướng từ API" headers={headers} rows={result.records.map(row => [row.month, format(row.value), format(row.trend)])} />
+        </div>;
+      }}</ApiResult>
     </Panel>
-    <Panel title="Quy luật theo tháng trong năm" description="Gộp các tháng cùng tên trong khoảng lọc. Mỗi tháng có thể có số quan sát khác nhau; đây là mô tả dữ liệu, chưa phải phân rã mùa vụ.">
-      <ChartFrame label="Trung bình, mức thấp nhất và cao nhất theo tháng trong năm">
-        <ResponsiveContainer width="100%" height="100%"><LineChart data={seasonal} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis width={60} tick={{ fontSize: 11 }} />
-          <Tooltip contentStyle={tooltipStyle} formatter={v => `${format(Number(v))} TWh`} /><Legend wrapperStyle={{ fontSize: 12 }} />
-          <Line dataKey="max" name="Cao nhất (TWh)" stroke="#3b82f6" strokeDasharray="4 4" connectNulls={false} />
-          <Line dataKey="average" name="Trung bình (TWh)" stroke="#f59e0b" strokeWidth={3} connectNulls={false} />
-          <Line dataKey="min" name="Thấp nhất (TWh)" stroke="#10b981" strokeDasharray="4 4" connectNulls={false} />
-        </LineChart></ResponsiveContainer>
-      </ChartFrame>
-      {points.length < 24 && <p role="status" className="text-sm text-muted-foreground">Khoảng lọc dưới 24 tháng: cần thêm nhiều năm để đánh giá quy luật mùa vụ đáng tin cậy hơn.</p>}
-    </Panel>
-    <Panel title="Thống kê theo tháng" actions={<ExportCsv filename="seasonality.csv" headers={headers} rows={seasonal.map(p => [p.month, p.count, p.average, p.min, p.max])} />}>
-      <DataTable caption="Thống kê mùa vụ" headers={headers} rows={seasonal.map(p => [p.month, p.count, format(p.average), format(p.min), format(p.max)])} />
-    </Panel>
-    <Panel title="Dữ liệu xu hướng" description="Dấu — nghĩa là chưa đủ lịch sử cho cửa sổ đã chọn."
-      actions={<ExportCsv filename={`trend-ma${window}.csv`} headers={["Tháng", "Tiêu thụ (TWh)", `MA${window} (TWh)`]} rows={trend.map(p => [p.month, p.value, p.movingAverage])} />}>
-      <DataTable caption="Giá trị xu hướng và trung bình trượt" headers={["Tháng", "Tiêu thụ (TWh)", `MA${window} (TWh)`]} rows={trend.map(p => [p.month, format(p.value), format(p.movingAverage)])} />
+    <Panel title="Quy luật theo tháng trong năm" description="Trung bình, trung vị và khoảng tiêu thụ được trả về từ API mùa vụ.">
+      <SeasonalityApiChart points={points} />
+      {points.length < 24 && <p className="text-xs text-muted-foreground">Dưới 24 tháng dữ liệu: chưa đủ nhiều chu kỳ để kết luận về mùa vụ.</p>}
     </Panel>
   </>;
 }
-export function TrendAnalysis() { return <AnalysisWorkspace kind="trend">{(points, all) => <TrendView points={points} all={all} />}</AnalysisWorkspace>; }
+export function TrendAnalysis() { return <AnalysisWorkspace kind="trend">{points => <TrendView points={points} />}</AnalysisWorkspace>; }
