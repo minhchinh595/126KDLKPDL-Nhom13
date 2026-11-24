@@ -1,10 +1,7 @@
 """Validate and idempotently import the processed monthly electricity CSV."""
 
 import argparse
-import csv
 import sys
-from datetime import date
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from sqlalchemy import func, literal_column, select
@@ -16,69 +13,16 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db.database import get_session_factory  # noqa: E402
 from app.db.models import Dataset, ElectricityConsumption  # noqa: E402
+from app.ingestion.reader import parse_csv_bytes  # noqa: E402
 
-REQUIRED_COLUMNS = {
-    "country_id", "country", "iso3", "month", "metric", "fuel", "value", "unit"
-}
 DATASET_NAME = "Vietnam monthly electricity demand"
 DATASET_SOURCE = "Ember Monthly Electricity Data"
-
-
-def parse_month(value: str) -> date:
-    parsed = date.fromisoformat(f"{value}-01")
-    if parsed.day != 1:
-        raise ValueError("month must use YYYY-MM format")
-    return parsed
 
 
 def load_rows(path: Path) -> list[dict]:
     if not path.is_file():
         raise ValueError(f"CSV file not found: {path}")
-
-    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        reader = csv.DictReader(csv_file)
-        columns = set(reader.fieldnames or [])
-        missing = REQUIRED_COLUMNS - columns
-        if missing:
-            raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
-
-        rows = []
-        errors = []
-        seen = set()
-        for line_number, raw in enumerate(reader, start=2):
-            try:
-                if any(not (raw.get(column) or "").strip() for column in REQUIRED_COLUMNS - {"fuel"}):
-                    raise ValueError("required value is blank")
-                month = parse_month(raw["month"].strip())
-                value = Decimal(raw["value"].strip())
-                if not value.is_finite() or value < 0:
-                    raise ValueError("value must be a finite non-negative number")
-                fuel = raw["fuel"].strip() or None
-                row = {
-                    "country_id": raw["country_id"].strip(),
-                    "country": raw["country"].strip(),
-                    "iso3": raw["iso3"].strip().upper(),
-                    "month": month,
-                    "metric": raw["metric"].strip(),
-                    "fuel": fuel,
-                    "value": value,
-                    "unit": raw["unit"].strip(),
-                }
-                if len(row["iso3"]) != 3:
-                    raise ValueError("iso3 must contain exactly three characters")
-                key = (row["country_id"], row["month"], row["metric"], row["fuel"] or "")
-                if key in seen:
-                    raise ValueError("duplicate natural key in CSV")
-                seen.add(key)
-                rows.append(row)
-            except (ValueError, InvalidOperation) as exc:
-                errors.append(f"line {line_number}: {exc}")
-
-    if errors:
-        raise ValueError("CSV validation failed:\n" + "\n".join(errors))
-    if not rows:
-        raise ValueError("CSV contains no data rows")
-    return rows
+    return parse_csv_bytes(path.read_bytes())
 
 
 def import_rows(rows: list[dict], csv_path: Path) -> tuple[int, int]:

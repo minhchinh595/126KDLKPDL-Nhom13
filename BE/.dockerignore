@@ -1,7 +1,21 @@
 
 venv/
+.venv/
 __pycache__/
+**/__pycache__/
 *.py[cod]
 .pytest_cache/
-.env
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
 .git/
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.temp
+uploads/
+artifacts/
