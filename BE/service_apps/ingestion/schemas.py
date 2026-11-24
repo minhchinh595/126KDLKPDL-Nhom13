@@ -41,5 +41,3 @@ class NormalizeResponse(BaseModel):
         if self.start_month != min(months) or self.end_month != max(months):
             raise ValueError("month range must match rows")
         return self
-
-
