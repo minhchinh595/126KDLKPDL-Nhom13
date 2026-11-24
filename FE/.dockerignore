@@ -2,6 +2,12 @@
 node_modules/
 .next/
 out/
-.env.local
+coverage/
 .env
+.env.*
+!.env.example
 .git/
+.turbo/
+*.log
+*.tsbuildinfo
+.DS_Store

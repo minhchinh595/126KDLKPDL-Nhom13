@@ -36,13 +36,16 @@ test("current backend response schema matches the frontend contract", t => {
   assert.equal(data.start_month, data.records[0].month);
   assert.equal(data.end_month, data.records.at(-1).month);
 });
-test("fetch uses configured endpoint and no-store, then validates response", async t => {
+test("fetch uses configured endpoint, sends credentials and no-store, then validates response", async t => {
   t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.equal(url, "http://test.local/api/electricity/demand?page=1&page_size=1000");
     assert.equal(options.credentials, "include");
     assert.equal(options.cache, "no-store");
+    assert.equal(options.credentials, "include");
+    assert.equal(options.headers.Accept, "application/json");
     return Response.json(fixture());
   });
+
   assert.equal((await fetchDemandDataset({ baseUrl: "http://test.local/" })).total, 2);
 });
 test("HTTP errors never fall back to hardcoded data", async t => {

@@ -1,3 +1,5 @@
+x-backend-image: &backend-image electricity-analytics-backend:local
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -16,6 +18,167 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  gateway:
+    image: *backend-image
+    build:
+      context: ./BE
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in the project .env file}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env file}@postgres:5432/${POSTGRES_DB:-electricity_analytics_db}"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in the project .env file}
+      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-60}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      DATASET_MAX_UPLOAD_BYTES: ${DATASET_MAX_UPLOAD_BYTES:-26214400}
+      DATASET_UPLOAD_DIR: /app/uploads
+      DATASET_SYNC_URL: ${DATASET_SYNC_URL:-}
+      DATASET_PATH: /data/raw/ember-monthly-generation.csv
+      PROCESSED_DATASET_PATH: /data/processed/vietnam_electricity_demand.csv
+      ANALYSIS_SERVICE_URL: http://analysis:8101
+      ANALYSIS_SERVICE_SECRET: ${ANALYSIS_SERVICE_SECRET:?Set ANALYSIS_SERVICE_SECRET in the project .env file}
+      ANALYSIS_SERVICE_TIMEOUT_SECONDS: ${ANALYSIS_SERVICE_TIMEOUT_SECONDS:-5}
+      CLUSTERING_SERVICE_URL: http://clustering:8102
+      CLUSTERING_SERVICE_SECRET: ${CLUSTERING_SERVICE_SECRET:?Set CLUSTERING_SERVICE_SECRET in the project .env file}
+      CLUSTERING_SERVICE_TIMEOUT_SECONDS: ${CLUSTERING_SERVICE_TIMEOUT_SECONDS:-30}
+      PREDICTION_SERVICE_URL: http://prediction:8103
+      PREDICTION_SERVICE_SECRET: ${PREDICTION_SERVICE_SECRET:?Set PREDICTION_SERVICE_SECRET in the project .env file}
+      PREDICTION_SERVICE_TIMEOUT_SECONDS: ${PREDICTION_SERVICE_TIMEOUT_SECONDS:-120}
+      CLASSIFICATION_SERVICE_URL: http://classification:8104
+      CLASSIFICATION_SERVICE_SECRET: ${CLASSIFICATION_SERVICE_SECRET:?Set CLASSIFICATION_SERVICE_SECRET in the project .env file}
+      CLASSIFICATION_SERVICE_TIMEOUT_SECONDS: ${CLASSIFICATION_SERVICE_TIMEOUT_SECONDS:-120}
+      INGESTION_SERVICE_URL: http://ingestion:8105
+      INGESTION_SERVICE_SECRET: ${INGESTION_SERVICE_SECRET:?Set INGESTION_SERVICE_SECRET in the project .env file}
+      INGESTION_SERVICE_TIMEOUT_SECONDS: ${INGESTION_SERVICE_TIMEOUT_SECONDS:-30}
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - ./BE/uploads:/app/uploads
+      - ./data:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      analysis:
+        condition: service_healthy
+      clustering:
+        condition: service_healthy
+      prediction:
+        condition: service_healthy
+      classification:
+        condition: service_healthy
+      ingestion:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)); assert data.get('status') == 'success' and data.get('database') == 'connected'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  analysis:
+    image: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "service_apps.analysis.main:app", "--host", "0.0.0.0", "--port", "8101"]
+    environment:
+      ANALYSIS_SERVICE_SECRET: ${ANALYSIS_SERVICE_SECRET:?Set ANALYSIS_SERVICE_SECRET in the project .env file}
+    expose:
+      - "8101"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8101/health', timeout=3)); assert data.get('status') == 'success' and data.get('service') == 'analysis'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  clustering:
+    image: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "service_apps.clustering.main:app", "--host", "0.0.0.0", "--port", "8102"]
+    environment:
+      CLUSTERING_SERVICE_SECRET: ${CLUSTERING_SERVICE_SECRET:?Set CLUSTERING_SERVICE_SECRET in the project .env file}
+      CLUSTERING_MODEL_PATH: /app/artifacts/electricity_demand_kmeans.joblib
+    expose:
+      - "8102"
+    volumes:
+      - ./BE/artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8102/health', timeout=3)); assert data.get('status') == 'success' and data.get('service') == 'clustering'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  prediction:
+    image: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "service_apps.prediction.main:app", "--host", "0.0.0.0", "--port", "8103"]
+    environment:
+      PREDICTION_SERVICE_SECRET: ${PREDICTION_SERVICE_SECRET:?Set PREDICTION_SERVICE_SECRET in the project .env file}
+      PREDICTION_MODEL_PATH: /app/artifacts/electricity_demand_rf.joblib
+    expose:
+      - "8103"
+    volumes:
+      - ./BE/artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8103/health', timeout=3)); assert data.get('status') == 'success' and data.get('service') == 'prediction'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  classification:
+    image: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "service_apps.classification.main:app", "--host", "0.0.0.0", "--port", "8104"]
+    environment:
+      CLASSIFICATION_SERVICE_SECRET: ${CLASSIFICATION_SERVICE_SECRET:?Set CLASSIFICATION_SERVICE_SECRET in the project .env file}
+      CLASSIFICATION_MODEL_PATH: /app/artifacts/electricity_demand_classifier.joblib
+    expose:
+      - "8104"
+    volumes:
+      - ./BE/artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8104/health', timeout=3)); assert data.get('status') == 'success' and data.get('service') == 'classification'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  ingestion:
+    image: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "service_apps.ingestion.main:app", "--host", "0.0.0.0", "--port", "8105"]
+    environment:
+      INGESTION_SERVICE_SECRET: ${INGESTION_SERVICE_SECRET:?Set INGESTION_SERVICE_SECRET in the project .env file}
+      DATASET_MAX_UPLOAD_BYTES: ${DATASET_MAX_UPLOAD_BYTES:-26214400}
+    expose:
+      - "8105"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8105/health', timeout=3)); assert data.get('status') == 'success' and data.get('service') == 'ingestion'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./FE
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
 
 volumes:
   electricity_analytics_postgres_data:
