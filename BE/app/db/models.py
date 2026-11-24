@@ -51,6 +51,7 @@ class Dataset(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     source: Mapped[str] = mapped_column(String(255), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str | None] = mapped_column(String(80), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
     record_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     start_date: Mapped[date | None] = mapped_column(Date)
@@ -60,6 +61,34 @@ class Dataset(TimestampMixin, Base):
     consumption_records: Mapped[list["ElectricityConsumption"]] = relationship(
         back_populates="dataset", cascade="all, delete-orphan"
     )
+    import_history: Mapped[list["DatasetImport"]] = relationship(
+        back_populates="dataset", cascade="all, delete-orphan"
+    )
+
+
+class DatasetImport(Base):
+    __tablename__ = "dataset_imports"
+    __table_args__ = (
+        Index("ix_dataset_imports_dataset_id", "dataset_id"),
+        Index("ix_dataset_imports_started_at", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    rows_read: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    inserted_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    updated_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    skipped_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    error_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    dataset: Mapped[Dataset] = relationship(back_populates="import_history")
 
 
 class ElectricityConsumption(Base):

@@ -37,7 +37,10 @@ def load_rows(path: Path) -> list[dict]:
 
     with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
         reader = csv.DictReader(csv_file)
-        columns = set(reader.fieldnames or [])
+        headers = reader.fieldnames or []
+        if len(headers) != len(set(headers)) or any(not header.strip() for header in headers):
+            raise ValueError("CSV headers must be present and unique")
+        columns = set(headers)
         missing = REQUIRED_COLUMNS - columns
         if missing:
             raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
@@ -47,6 +50,8 @@ def load_rows(path: Path) -> list[dict]:
         seen = set()
         for line_number, raw in enumerate(reader, start=2):
             try:
+                if None in raw:
+                    raise ValueError("row contains more values than the CSV header")
                 if any(not (raw.get(column) or "").strip() for column in REQUIRED_COLUMNS - {"fuel"}):
                     raise ValueError("required value is blank")
                 month = parse_month(raw["month"].strip())
@@ -66,6 +71,10 @@ def load_rows(path: Path) -> list[dict]:
                 }
                 if len(row["iso3"]) != 3:
                     raise ValueError("iso3 must contain exactly three characters")
+                if row["iso3"] != "VNM" or row["metric"] != "demand" or row["fuel"] is not None or row["unit"] != "TWh":
+                    raise ValueError("only VNM monthly demand with blank fuel and TWh units is supported")
+                if len(value.as_tuple().digits) > 14 or max(-value.as_tuple().exponent, 0) > 4:
+                    raise ValueError("value exceeds the supported NUMERIC(14, 4) precision")
                 key = (row["country_id"], row["month"], row["metric"], row["fuel"] or "")
                 if key in seen:
                     raise ValueError("duplicate natural key in CSV")

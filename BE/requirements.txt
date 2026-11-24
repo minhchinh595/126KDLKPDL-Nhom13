@@ -9,3 +9,8 @@ pydantic-settings
 pandas
 numpy
 scikit-learn
+pwdlib[argon2]
+PyJWT
+python-multipart
+httpx2
+pytest
