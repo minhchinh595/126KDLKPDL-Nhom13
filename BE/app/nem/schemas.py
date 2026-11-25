@@ -209,12 +209,20 @@ def parse_response(
                     raise NEMResponseValidationError(
                         f"result series {result_name!r} contains a malformed observation"
                     )
+
+                observed_at = _parse_timestamp(point[0])
+
+                # Open Electricity may return null when an interval has no observation.
+                # Skip missing values instead of converting them to zero.
+                if point[1] is None:
+                    continue
+
                 records.append(
                     NEMObservationRecord(
                         network_code=network_code,
                         metric=metric,
                         interval=interval,
-                        observed_at=_parse_timestamp(point[0]),
+                        observed_at=observed_at,
                         value=_parse_value(point[1]),
                         unit=unit,
                         result=result_name,

@@ -254,7 +254,17 @@ def test_parser_rejects_naive_timestamp(sample_payload):
         parse_response(sample_payload)
 
 
-@pytest.mark.parametrize("bad_value", [None, "not-numeric", "NaN", "Infinity", True])
+def test_parser_skips_null_observation_values(sample_payload):
+    sample_payload["data"][0]["results"][0]["data"][0][1] = None
+
+    records = parse_response(sample_payload)
+
+    assert len(records) == 287
+    assert all(record.value is not None for record in records)
+    assert records[0].observed_at.isoformat() == "2026-11-23T00:05:00+10:00"
+
+
+@pytest.mark.parametrize("bad_value", ["not-numeric", "NaN", "Infinity", True])
 def test_parser_rejects_non_numeric_or_non_finite_values(sample_payload, bad_value):
     sample_payload["data"][0]["results"][0]["data"][0][1] = bad_value
     with pytest.raises(NEMResponseValidationError, match="numeric|finite"):
