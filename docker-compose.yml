@@ -164,6 +164,26 @@ services:
       retries: 6
       start_period: 15s
 
+  nem-ingestion-worker:
+    image: *backend-image
+    profiles: ["nem-ingestion"]
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.nem.worker"]
+    environment:
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in the project .env file}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env file}@postgres:5432/${POSTGRES_DB:-electricity_analytics_db}"
+      OPEN_ELECTRICITY_API_KEY: ${OPEN_ELECTRICITY_API_KEY:-}
+      OPEN_ELECTRICITY_BASE_URL: ${OPEN_ELECTRICITY_BASE_URL:-https://api.openelectricity.org.au/v4}
+      OPEN_ELECTRICITY_TIMEOUT_SECONDS: ${OPEN_ELECTRICITY_TIMEOUT_SECONDS:-30}
+      NEM_5M_POLL_SECONDS: ${NEM_5M_POLL_SECONDS:-300}
+      NEM_DAILY_POLL_SECONDS: ${NEM_DAILY_POLL_SECONDS:-86400}
+      NEM_5M_LOOKBACK_MINUTES: ${NEM_5M_LOOKBACK_MINUTES:-30}
+      NEM_DAILY_LOOKBACK_DAYS: ${NEM_DAILY_LOOKBACK_DAYS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./FE
