@@ -1,22 +1,24 @@
+import { resolveApiBase } from "./demand-api";
 export interface HealthResponse {
   status: string;
   message: string;
   project?: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
 export async function checkBackend(): Promise<HealthResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
 
   try {
-    const response = await fetch(`${API_URL}/api/health`, {
+    const response = await fetch(`${resolveApiBase(API_URL)}/api/health`, {
       signal: controller.signal,
       headers: {
         "Accept": "application/json",
       },
       cache: "no-store",
+      credentials: "include",
     });
 
     clearTimeout(timeoutId);

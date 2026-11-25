@@ -74,7 +74,7 @@ export function analyticsPath(endpoint: AnalyticsEndpoint, params: AnalyticsPara
   const query = new URLSearchParams(Object.entries(params).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, String(value)]));
   return endpoint + (query.size ? `?${query}` : "");
 }
-export async function fetchAnalytics<T>(endpoint: AnalyticsEndpoint, params: AnalyticsParams, parse: (value: unknown) => T, { signal, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000", timeoutMs = 15000 }: { signal?: AbortSignal; baseUrl?: string; timeoutMs?: number } = {}): Promise<T> {
+export async function fetchAnalytics<T>(endpoint: AnalyticsEndpoint, params: AnalyticsParams, parse: (value: unknown) => T, { signal, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001", timeoutMs = 15000 }: { signal?: AbortSignal; baseUrl?: string; timeoutMs?: number } = {}): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) controller.abort();

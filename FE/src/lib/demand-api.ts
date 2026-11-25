@@ -1,18 +1,19 @@
 import type { DemandPoint } from "./analysis-data";
 
 export class DemandApiError extends Error {
-  constructor(public status: number, message: string) { super(message); this.name = "DemandApiError"; }
+  constructor(public status: number, message: string) { super(message); this.name = "DemandApiError"; if (status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("gateway-session-expired")); }
 }
 
 export function resolveApiBase(baseUrl: string, browserHostname = typeof window === "undefined" ? "" : window.location.hostname) {
   const url = new URL(baseUrl);
+  if (["8101", "8102", "8103", "8104", "8105", "5433"].includes(url.port)) throw new Error("Frontend chỉ được kết nối API Gateway; hãy cấu hình NEXT_PUBLIC_API_URL=http://localhost:8001.");
   const local = ["localhost", "127.0.0.1"];
   // Keep local cookie requests same-site without changing remote API hosts.
   if (local.includes(url.hostname) && local.includes(browserHostname)) url.hostname = browserHostname;
   return url.toString().replace(/\/+$/, "");
 }
 
-export async function loginForDemand(email: string, password: string, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") {
+export async function loginForDemand(email: string, password: string, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001") {
   let response: Response;
   try {
     response = await fetch(`${resolveApiBase(baseUrl)}/api/auth/login`, {
@@ -57,7 +58,7 @@ export function parseDemandDataset(input: unknown): DemandDataset {
   return { source: data.source, country: data.country, iso3: "VNM", unit: "TWh", total: records.length, start_month: start, end_month: end, records };
 }
 
-export async function fetchDemandDataset({ signal, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000", timeoutMs = 15000 }: { signal?: AbortSignal; baseUrl?: string; timeoutMs?: number } = {}): Promise<DemandDataset> {
+export async function fetchDemandDataset({ signal, baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001", timeoutMs = 15000 }: { signal?: AbortSignal; baseUrl?: string; timeoutMs?: number } = {}): Promise<DemandDataset> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) controller.abort();
