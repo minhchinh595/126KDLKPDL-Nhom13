@@ -1,47 +1,43 @@
-from datetime import timedelta
-
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_analyst
 from app.db.database import get_db
-from app.db.models import Dataset, ElectricityConsumption, ModelRun
 from app.schemas.dashboard import DashboardOverview
+from app.services.nem_data import NEMDatasetUnavailable, query_observations, resolve_nem_dataset
 
 router = APIRouter(prefix="/dashboard", dependencies=[Depends(require_analyst)])
 
 
-@router.get("/overview", response_model=DashboardOverview)
 def dashboard_overview(db: Session = Depends(get_db)):
-    base = select(ElectricityConsumption).where(
-        ElectricityConsumption.iso3 == "VNM", ElectricityConsumption.metric == "demand",
-        ElectricityConsumption.fuel.is_(None), ElectricityConsumption.unit == "TWh",
-    ).subquery()
-    aggregate = db.execute(select(
-        func.count(base.c.id), func.min(base.c.month), func.max(base.c.month),
-        func.avg(base.c.value), func.min(base.c.value), func.max(base.c.value),
-    )).one()
-    latest = db.execute(select(base.c.month, base.c.value).order_by(base.c.month.desc()).limit(1)).first()
-    previous = None
-    if latest:
-        previous_month = (latest.month - timedelta(days=1)).replace(day=1)
-        previous = db.scalar(select(base.c.value).where(base.c.month == previous_month))
-    dataset_count = db.scalar(select(func.count()).select_from(Dataset)) or 0
-    model_run_count = db.scalar(select(func.count()).select_from(ModelRun)) or 0
-    latest_dataset_update = db.scalar(select(func.max(Dataset.updated_at)))
-    change_pct = round((float(latest.value) - float(previous)) / float(previous) * 100, 4) if latest and previous not in (None, 0) else None
-    return {
-        "record_count": aggregate[0],
-        "start_month": aggregate[1].strftime("%Y-%m") if aggregate[1] else None,
-        "latest_month": latest.month.strftime("%Y-%m") if latest else None,
-        "mean_demand_twh": round(float(aggregate[3]), 4) if aggregate[3] is not None else None,
-        "minimum_demand_twh": round(float(aggregate[4]), 4) if aggregate[4] is not None else None,
-        "maximum_demand_twh": round(float(aggregate[5]), 4) if aggregate[5] is not None else None,
-        "latest_demand_twh": float(latest.value) if latest else None,
-        "change_from_previous_month_pct": change_pct,
-        "dataset_count": dataset_count,
-        "model_run_count": model_run_count,
-        "data_updated_at": latest_dataset_update,
-        "unit": "TWh",
-    }
+    try:
+        dataset = resolve_nem_dataset(db)
+        def values(metric):
+            _, rows, _ = query_observations(db, metric=metric, interval="1d", page=1, page_size=1000)
+            return rows
+        demand = values("demand")
+        renewable = values("renewable_proportion")
+        prices = values("price")
+        vals = [float(row.value) for row in demand]
+        return {
+            "dataset_name": dataset.name, "dataset_status": dataset.status,
+            "total_observations": dataset.record_count,
+            "latest_daily_demand_mw": float(demand[-1].value) if demand else None,
+            "average_daily_demand_mw": sum(vals) / len(vals) if vals else None,
+            "minimum_daily_demand_mw": min(vals) if vals else None,
+            "maximum_daily_demand_mw": max(vals) if vals else None,
+            "latest_renewable_proportion_percent": float(renewable[-1].value) if renewable else None,
+            "latest_price_per_mwh": float(prices[-1].value) if prices else None,
+            "latest_data_timestamp": max((row.observed_at for row in [*demand, *renewable, *prices]), default=None),
+            "timezone": "Australia/Brisbane",
+        }
+    except NEMDatasetUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="NEM observations are unavailable") from exc
+
+
+@router.get("/overview", response_model=DashboardOverview)
+def get_dashboard_overview(db: Session = Depends(get_db)):
+    return dashboard_overview(db)

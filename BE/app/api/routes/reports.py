@@ -3,7 +3,7 @@ import io
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from app.api.routes.dashboard import dashboard_overview
 from app.db.database import get_db
 from app.db.models import ModelRun
 from app.schemas.reports import ReportAnalysis, ReportModelRuns, ReportSummary
+from app.services.nem_data import NEMDatasetUnavailable, query_observations
 
 router = APIRouter(prefix="/reports", dependencies=[Depends(require_analyst)])
 
@@ -24,14 +25,15 @@ def report_summary(db: Session = Depends(get_db)):
 
 
 @router.get("/analysis", response_model=ReportAnalysis)
-def report_analysis(start_month: str | None = None, end_month: str | None = None, db: Session = Depends(get_db)):
+def report_analysis(start_at: datetime | None = None, end_at: datetime | None = None, db: Session = Depends(get_db)):
     return {
-        "unit": "TWh", "start_month": start_month, "end_month": end_month,
-        "summary": get_summary(start_month, end_month, db),
-        "trend": get_trend(start_month, end_month, 12, db),
-        "seasonality": get_seasonality(start_month, end_month, db),
-        "correlation": get_correlation(start_month, end_month, db),
-        "distribution": get_distribution(start_month, end_month, 10, db),
+        "dataset_name": "Open Electricity NEM", "timezone": "Australia/Brisbane",
+        "start_at": start_at, "end_at": end_at,
+        "summary": get_summary(start_at, end_at, db),
+        "trend": get_trend(start_at=start_at, end_at=end_at, view="month", db=db),
+        "seasonality": get_seasonality(start_at, end_at, db),
+        "correlation": get_correlation(start_at, end_at, db),
+        "distribution": get_distribution("demand", "1d", start_at, end_at, 10, db),
     }
 
 
@@ -45,25 +47,25 @@ def report_model_runs(model_type: Literal["clustering", "prediction", "classific
 
 
 @router.get("/export")
-def export_report(report_type: Literal["demand", "model-runs"] = "demand", db: Session = Depends(get_db)):
+def export_report(report_type: Literal["demand", "model-runs"] = "demand", metric: str = "demand", interval: str = "1d", start_at: datetime | None = None, end_at: datetime | None = None, page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1, le=1000), db: Session = Depends(get_db)):
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     try:
         if report_type == "demand":
-            from app.db.models import ElectricityConsumption
-            rows = db.execute(select(ElectricityConsumption).where(
-                ElectricityConsumption.iso3 == "VNM", ElectricityConsumption.metric == "demand",
-                ElectricityConsumption.fuel.is_(None), ElectricityConsumption.unit == "TWh",
-            ).order_by(ElectricityConsumption.month)).scalars()
-            writer.writerow(["id", "country", "iso3", "month", "metric", "value", "unit"])
+            _, rows, _ = query_observations(db, metric=metric, interval=interval, start_at=start_at, end_at=end_at, page=page, page_size=page_size)
+            writer.writerow(["network_code", "metric", "interval", "unit", "observed_at", "value", "result", "grouping_type", "grouping_code"])
             for row in rows:
-                writer.writerow([row.id, row.country, row.iso3, row.month.strftime("%Y-%m"), row.metric, row.value, row.unit])
-            filename = "electricity_demand_report.csv"
+                writer.writerow([row.network_code, row.metric, row.interval, row.unit, row.observed_at.isoformat(), row.value, row.result, row.grouping_type, row.grouping_code])
+            filename = "nem_observations_report.csv"
         else:
             writer.writerow(["id", "model_type", "status", "created_at", "started_at", "completed_at", "parameters", "metrics", "error_message"])
             for row in db.scalars(select(ModelRun).order_by(ModelRun.created_at.desc()).limit(500)):
                 writer.writerow([row.id, row.model_type, row.status, row.created_at, row.started_at, row.completed_at, row.parameters, row.metrics, row.error_message])
             filename = "model_runs_report.csv"
+    except NEMDatasetUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="Report data is unavailable") from exc
     return Response(stream.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})

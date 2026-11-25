@@ -1,9 +1,6 @@
 from datetime import datetime
-from typing import Any
-
 from pydantic import BaseModel
 
-from app.schemas.analysis import CorrelationResponse, DistributionResponse, SeasonalityResponse, SummaryResponse, TrendResponse
 from app.schemas.dashboard import DashboardOverview
 from app.schemas.model_runs import ModelRunPublic
 
@@ -14,14 +11,15 @@ class ReportSummary(BaseModel):
 
 
 class ReportAnalysis(BaseModel):
-    unit: str
-    start_month: str | None
-    end_month: str | None
-    summary: SummaryResponse
-    trend: TrendResponse
-    seasonality: SeasonalityResponse
-    correlation: CorrelationResponse
-    distribution: DistributionResponse
+    dataset_name: str
+    timezone: str
+    start_at: datetime | None
+    end_at: datetime | None
+    summary: dict
+    trend: dict
+    seasonality: dict
+    correlation: dict
+    distribution: dict
 
 
 class ReportModelRuns(BaseModel):

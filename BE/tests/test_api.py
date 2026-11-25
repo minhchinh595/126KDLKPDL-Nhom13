@@ -6,9 +6,10 @@ from pathlib import Path
 
 import jwt
 
-from app.db.models import Dataset, ElectricityConsumption, ModelRun
+from app.db.models import Dataset, ElectricityConsumption, ModelRun, NEMObservation
 from conftest import authenticate
 from scripts.import_electricity_data import load_rows
+from app.services.nem_import import NEM_DATASET_NAME, NEM_DATASET_SOURCE
 
 
 def make_csv(value: str = "17.87", month: str = "2026-09") -> bytes:
@@ -100,7 +101,7 @@ def test_admin_user_management_and_last_admin_protection(client, admin):
 
 
 def test_analyst_can_read_but_cannot_manage_or_run(client, analyst, db_session):
-    dataset = Dataset(name="analyst-readable", source="fixture", file_name="read.csv")
+    dataset = Dataset(name=NEM_DATASET_NAME, source=NEM_DATASET_SOURCE, file_name="API observations", record_count=0)
     db_session.add(dataset)
     db_session.commit()
     login_analyst(client, analyst)
@@ -152,18 +153,19 @@ def test_upload_validation_import_history_and_idempotency(client, admin, monkeyp
 
 
 def test_electricity_pagination_detail_statistics_and_export(client, analyst, db_session):
-    dataset = Dataset(name="demand", source="fixture", file_name="demand.csv", record_count=2)
+    dataset = Dataset(name=NEM_DATASET_NAME, source=NEM_DATASET_SOURCE, file_name="API observations", record_count=2)
     db_session.add(dataset)
     db_session.flush()
     db_session.add_all([
-        ElectricityConsumption(dataset_id=dataset.id, country_id="vnm", country="Vietnam", iso3="VNM", month=date(2026, 8, 1), metric="demand", fuel=None, value=16, unit="TWh"),
-        ElectricityConsumption(dataset_id=dataset.id, country_id="vnm", country="Vietnam", iso3="VNM", month=date(2026, 9, 1), metric="demand", fuel=None, value=18, unit="TWh"),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="demand", interval="1d", observed_at=datetime(2026, 8, 1, tzinfo=timezone.utc), value=16, unit="MW", result="NEM", grouping_type="network", grouping_code=""),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="demand", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=18, unit="MW", result="NEM", grouping_type="network", grouping_code=""),
     ])
     db_session.commit()
     login_analyst(client, analyst)
     page = client.get("/api/electricity/demand?page=1&page_size=1").json()
     assert page["total_matches"] == 2 and len(page["records"]) == 1
-    assert client.get("/api/electricity/demand?start_month=2026-10&end_month=2026-01").status_code == 422
+    assert page["records"][0]["metric"] == "demand" and page["records"][0]["unit"] == "MW"
+    assert client.get("/api/electricity/demand?start_at=2026-10-01T00:00:00Z&end_at=2026-01-01T00:00:00Z").status_code == 422
     assert client.get("/api/electricity/demand/statistics").json()["count"] == 2
     assert client.get(f"/api/electricity/demand/{page['records'][0]['id']}").status_code == 200
     export = client.get("/api/electricity/demand/export")
@@ -171,45 +173,42 @@ def test_electricity_pagination_detail_statistics_and_export(client, analyst, db
 
 
 def test_dashboard_analysis_model_runs_and_reports(client, analyst, db_session, monkeypatch):
-    from app.analysis.correlation import build_correlation
-    from app.analysis.distribution import build_distribution
-    from app.analysis.seasonality import build_seasonality
-    from app.analysis.statistics import build_summary
-    from app.analysis.trends import build_trend
     from app.api.routes import analysis as analysis_routes
 
     def local_analysis(operation, records, **options):
-        if operation == "summary":
-            return {"unit": "TWh", "start_month": records[0]["month"] if records else None,
-                    "end_month": records[-1]["month"] if records else None, **build_summary(records)}
-        if operation == "trend":
-            return {"unit": "TWh", **build_trend(records, options["window_months"])}
-        if operation == "seasonality":
-            return {"unit": "TWh", **build_seasonality(records)}
-        if operation == "correlation":
-            return {"unit": "TWh", **build_correlation(records)}
-        return {"unit": "TWh", **build_distribution(records, options["bins"])}
+        if operation == "nem-summary": return {"metric": "demand", "interval": "1d", "unit": "MW", "sample_count": len(records), "start_date": "2026-09-01", "end_date": "2026-09-01", "mean": 17, "median": 17, "minimum": 17, "maximum": 17}
+        if operation == "nem-trend": return {"metric": "demand", "unit": "MW", "view": options["view"], "aggregation": "test", "records": []}
+        if operation == "nem-seasonality": return {"metric": "demand", "unit": "MW", "method": "test", "limitation": "test", "records": []}
+        if operation == "nem-correlation": return {"metrics": {}, "alignment": "test", "sample_dates": 1, "matrix": {}, "pair_counts": {}}
+        if operation == "nem-distribution": return {"metric": options["metric"], "interval": options["interval"], "unit": "MW", "sample_count": len(records), "bins": []}
+        return {"x": {}, "y": {}, "sample_count": 0, "points": []}
 
     monkeypatch.setattr(analysis_routes.analysis_service_client, "analyze", local_analysis)
-    dataset = Dataset(name="report-dataset", source="fixture", file_name="report.csv", record_count=1)
+    dataset = Dataset(name=NEM_DATASET_NAME, source=NEM_DATASET_SOURCE, file_name="API observations", record_count=5)
     db_session.add(dataset)
     db_session.flush()
-    db_session.add(ElectricityConsumption(dataset_id=dataset.id, country_id="vnm", country="Vietnam", iso3="VNM", month=date(2026, 9, 1), metric="demand", fuel=None, value=17, unit="TWh"))
+    db_session.add_all([
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="demand", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=17, unit="MW", result="NEM", grouping_type="network", grouping_code=""),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="price", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=-5, unit="$/MWh", result="NEM", grouping_type="network", grouping_code=""),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="demand_energy", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=400, unit="MWh", result="NEM", grouping_type="network", grouping_code=""),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="generation_renewable", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=8, unit="MW", result="NEM", grouping_type="network", grouping_code=""),
+        NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="renewable_proportion", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=47, unit="%", result="NEM", grouping_type="network", grouping_code=""),
+    ])
     run = ModelRun(model_type="clustering", status="completed", started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc), parameters={"k": 2}, metrics={"silhouette_score": 0.7})
     db_session.add(run)
     db_session.commit()
     login_analyst(client, analyst)
     overview = client.get("/api/dashboard/overview").json()
-    assert overview["record_count"] == 1 and overview["latest_demand_twh"] == 17
-    assert client.get("/api/analysis/summary").json()["count"] == 1
+    assert overview["total_observations"] == 5 and overview["latest_daily_demand_mw"] == 17
+    assert client.get("/api/analysis/summary").json()["sample_count"] == 5
     summary = client.get("/api/analysis/summary").json()
-    assert {"unit", "start_month", "end_month", "count", "mean", "median", "min", "max"} == set(summary)
-    assert client.get("/api/analysis/trend?window_months=6").json()["window_months"] == 6
+    assert summary["metric"] == "demand" and summary["unit"] == "MW" and summary["sample_count"] == 5
+    assert client.get("/api/analysis/trend?view=month").json()["view"] == "month"
     assert client.get("/api/analysis/seasonality").status_code == 200
     assert client.get("/api/analysis/correlation").status_code == 200
     assert client.get("/api/analysis/distribution").status_code == 200
-    assert client.get("/api/analysis/summary?start_month=2026-13").status_code == 422
-    assert client.get("/api/analysis/trend?window_months=1").status_code == 422
+    assert client.get("/api/analysis/summary?start_at=2026-09-01T00:00:00Z&end_at=2026-08-01T00:00:00Z").status_code == 422
+    assert client.get("/api/analysis/trend?view=year").status_code == 422
     assert client.get("/api/analysis/distribution?bins=51").status_code == 422
     assert client.get("/api/model-runs?model_type=clustering").json()["total"] == 1
     assert client.get(f"/api/model-runs/{run.id}").json()["parameters"] == {"k": 2}
@@ -219,10 +218,12 @@ def test_dashboard_analysis_model_runs_and_reports(client, analyst, db_session, 
     assert "text/csv" in client.get("/api/reports/export?report_type=model-runs").headers["content-type"]
 
 
-def test_empty_dashboard_and_model_result_lookup(client, analyst):
+def test_empty_dashboard_and_model_result_lookup(client, analyst, db_session):
+    db_session.add(Dataset(name=NEM_DATASET_NAME, source=NEM_DATASET_SOURCE, file_name="API observations", record_count=0, status="ready"))
+    db_session.commit()
     login_analyst(client, analyst)
     overview = client.get("/api/dashboard/overview").json()
-    assert overview["record_count"] == 0 and overview["latest_demand_twh"] is None
+    assert overview["total_observations"] == 0 and overview["latest_daily_demand_mw"] is None
     assert client.get("/api/prediction/latest").status_code == 404
     assert client.get("/api/classification/latest").status_code == 404
     assert client.get("/api/clustering/latest").status_code == 404
@@ -271,7 +272,7 @@ def test_dataset_sync_normalizes_through_ingestion_client_and_imports(client, ad
     assert response.status_code == 200, response.text
     assert response.json()["history"]["rows_read"] == 1
     assert calls and calls[0] > 0
-    assert client.get("/api/electricity/demand").json()["total_matches"] == 1
+    assert client.get("/api/electricity/demand").status_code == 503
 
 
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):

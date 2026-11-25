@@ -49,3 +49,11 @@ FE/dist/
 # ==============================
 .DS_Store
 Thumbs.db
+
+# Open Electricity NEM - local candidate data and experiments
+data/raw/openelectricity/
+data/processed/openelectricity/
+data/experiments/openelectricity/
+
+# Keep the NEM provenance manifest tracked
+!data/openelectricity_manifest.md

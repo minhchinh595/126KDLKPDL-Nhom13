@@ -43,8 +43,9 @@ def test_openapi_contains_preserved_and_added_routes():
     schema = app.openapi()
     paths = schema["paths"]
     expected = {
-        "/api/electricity/demand", "/api/analysis/summary", "/api/analysis/trend",
+        "/api/electricity/demand", "/api/electricity/observations", "/api/analysis/summary", "/api/analysis/trend",
         "/api/analysis/seasonality", "/api/analysis/correlation", "/api/analysis/distribution",
+        "/api/analysis/scatter",
         "/api/clustering/run", "/api/prediction/run", "/api/classification/run",
         "/api/auth/login", "/api/users", "/api/datasets/upload", "/api/dashboard/overview",
         "/api/model-runs", "/api/reports/export",
