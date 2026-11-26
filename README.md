@@ -2,6 +2,8 @@
 
 **Hệ thống phân tích mức tiêu thụ điện năng nhằm nhận diện quy luật sử dụng và dự đoán nhu cầu điện.**
 
+> Hướng dẫn clone và thiết lập máy mới: [docs/TEAM_SETUP.md](docs/TEAM_SETUP.md). Open Electricity NEM là nguồn dữ liệu hoạt động; dữ liệu/luồng VNM được giữ ở trạng thái legacy.
+
 ## 1. Giới thiệu dự án
 
 Dự án xây dựng hệ thống phân tích dữ liệu tiêu thụ điện năng nhằm khám phá các quy luật sử dụng năng lượng, phân nhóm đặc điểm tiêu thụ và dự đoán nhu cầu điện trong tương lai.

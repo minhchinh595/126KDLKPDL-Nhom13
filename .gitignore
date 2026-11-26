@@ -58,9 +58,18 @@ data/experiments/openelectricity/
 # Keep the NEM provenance manifest tracked
 !data/openelectricity_manifest.md
 
+# Raw database dumps stay local; only the sanitized, restore-tested handoff is eligible for Git.
+/backups/*.dump
+!/backups/electricity_analytics_nem_handoff_sanitized.dump
+
 # Open Electricity NEM - local trained model artifacts
 /BE/artifacts/electricity_nem_daily_kmeans.joblib
 /BE/artifacts/electricity_nem_daily_demand_rf.joblib
 /BE/artifacts/electricity_nem_daily_demand_rf_h2.joblib
 /BE/artifacts/electricity_nem_daily_demand_classifier.joblib
 /BE/artifacts/electricity_nem_daily_demand_classifier_h2.joblib
+
+# Ship only artifacts required for the active NEM demo runtime.
+!/BE/artifacts/electricity_nem_daily_kmeans.joblib
+!/BE/artifacts/electricity_nem_daily_demand_rf_h2.joblib
+!/BE/artifacts/electricity_nem_daily_demand_classifier_h2.joblib

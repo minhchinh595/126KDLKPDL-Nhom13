@@ -391,15 +391,18 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         monkeypatch.setattr(nem_kmeans, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_kmeans.joblib")
         monkeypatch.setattr(prediction_model, "_artifact_path", lambda: Path(artifacts_dir) / "prediction_test.joblib")
         monkeypatch.setattr(nem_prediction_model, "nem_h2_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_rf_h2.joblib")
-        monkeypatch.setattr(nem_prediction_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_rf_h2.joblib")
+        monkeypatch.setattr(nem_prediction_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_rf.joblib")
         monkeypatch.setattr(classification_model, "_artifact_path", lambda: Path(artifacts_dir) / "classification_test.joblib")
         monkeypatch.setattr(nem_classification_model, "nem_h2_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_classifier_h2.joblib")
-        monkeypatch.setattr(nem_classification_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_classifier_h2.joblib")
-        monkeypatch.setattr(
-            nem_ml_data,
-            "nem_forecast_dates",
-            lambda _now=None: (date(2026, 11, 26), date(2026, 11, 25), date(2026, 11, 27)),
+        monkeypatch.setattr(nem_classification_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_classifier.joblib")
+        fixed_nem_forecast_dates = lambda _now=None: (
+            date(2026, 11, 26),
+            date(2026, 11, 25),
+            date(2026, 11, 27),
         )
+        monkeypatch.setattr(nem_ml_data, "nem_forecast_dates", fixed_nem_forecast_dates)
+        monkeypatch.setattr(prediction_routes, "nem_forecast_dates", fixed_nem_forecast_dates)
+        monkeypatch.setattr(classification_routes, "nem_forecast_dates", fixed_nem_forecast_dates)
         secret = "clustering-integration-test-secret-at-least-32-bytes"
         monkeypatch.setenv("CLUSTERING_SERVICE_SECRET", secret)
         service_client = ServiceTestClient(clustering_service_app)
@@ -547,7 +550,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert classification.json()["metrics"]["unit"] == "MW"
         assert classification.json()["metrics"]["predicted_level"] in {"Low", "High"}
         assert client.get("/api/classification/latest").json()["metrics"]["forecast_date"] == "2026-11-27"
-        assert client.get("/api/classification/runs").json()["total"] == 2
+        assert client.get("/api/classification/runs").json()["total"] == 3
 
 
 def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, db_session, monkeypatch):

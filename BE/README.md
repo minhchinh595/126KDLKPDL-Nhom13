@@ -151,14 +151,9 @@ Check health at `http://127.0.0.1:8104/health`. NEM internal endpoints are `POST
 
 ## First administrator
 
-Create an admin interactively. The password is prompted without echo and is Argon2-hashed; the command only succeeds when there is no active admin yet.
+After starting PostgreSQL and restoring the sanitized handoff database (or applying migrations to a new empty database), create the first Admin with `BE/scripts/create_admin.py`. It reads `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` from the process environment, validates them, hashes the password with Argon2, and refuses if any Admin already exists. It does not modify existing users. The script is included in the backend image, so rebuild the image before running it after changing the script.
 
-```powershell
-cd BE
-python .\scripts\create_admin.py --username admin --email admin@example.com
-```
-
-There is no default account or password in source code.
+See [the team setup guide](../docs/TEAM_SETUP.md) for the PowerShell/Docker command. No default account or password is stored in source or `.env.example`.
 
 ## Authentication and access
 
@@ -232,17 +227,28 @@ Legacy monthly VNM implementations and artifact files (`electricity_demand_kmean
 
 Tests require a separate PostgreSQL database named exactly `electricity_analytics_test`. Do not point `TEST_DATABASE_URL` at the development database: the fixture recreates tables in that isolated test database.
 
-Create it once, using the project database container:
+The Compose test database is physically separate from the application database, uses host port `5435`, and has its own named volume. Start it explicitly when needed:
 
 ```powershell
-docker exec electricity-analytics-postgres createdb -U electricity_app -T template0 electricity_analytics_test
+docker compose --profile test-db up -d postgres-test
 ```
 
-Set a test-only connection string without changing `.env`, then run tests:
+The test fixture calls `drop_all()`/`create_all()` and clears test rows. It validates that `TEST_DATABASE_URL` uses PostgreSQL, host `127.0.0.1`/`localhost`, port `5435`, database `electricity_analytics_test`, and user `electricity_test`; it does not fall back to `DATABASE_URL`. Set the URL from a SecureString for the current PowerShell session, using the same password configured as `POSTGRES_TEST_PASSWORD` in the local `.env`:
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+psycopg://electricity_app:<same-local-password>@127.0.0.1:5433/electricity_analytics_test"
-python -m pytest -p no:cacheprovider -q
+$testPassword = Read-Host "Test database password" -AsSecureString
+$plainTestPassword = [System.Net.NetworkCredential]::new("", $testPassword).Password
+$escapedTestPassword = [Uri]::EscapeDataString($plainTestPassword)
+$env:TEST_DATABASE_URL = "postgresql+psycopg://electricity_test:$escapedTestPassword@127.0.0.1:5435/electricity_analytics_test"
+try {
+    python -m pytest -p no:cacheprovider -q
+}
+finally {
+    Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
+    $plainTestPassword = $null
+    $escapedTestPassword = $null
+    $testPassword.Dispose()
+}
 ```
 
-The model integration test uses the repository's real processed CSV, writes only to the `_test` database, and sends generated model artifacts to a temporary directory.
+Never substitute port `5433` or the application user. This suite is destructive to the isolated test schema only; it must not be pointed at any database with data to preserve. The model integration test sends generated model artifacts to a temporary directory.
