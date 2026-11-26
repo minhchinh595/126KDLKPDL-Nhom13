@@ -1,52 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { aggregateDemand, type DemandPoint, type Granularity } from "@/lib/analysis-data";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { parseSummary, parseTrend, rangeParams } from "@/lib/analytics-api";
+import type { Granularity } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
-
 import { ApiResult } from "./api-result";
-import { DistributionApiChart } from "./api-charts";
-import { parseSummary, rangeParams } from "@/lib/analytics-api";
 
-const headers = ["Kỳ", "Số tháng", "Tổng (TWh)", "TB/tháng (TWh)", "Cùng kỳ (TWh)", "YoY (%)"];
-function ConsumptionView({ points, all }: { points: DemandPoint[]; all: DemandPoint[] }) {
-  const [group, setGroup] = useState<Granularity>("month");
-  return <ApiResult endpoint="/api/analysis/summary" params={rangeParams(points)} parse={parseSummary}>{summary => {
-  if (summary.count !== points.length) return <p role="alert" className="text-sm text-muted-foreground">Dữ liệu đã thay đổi. Hãy bấm Tải lại từ API để đồng bộ kết quả và dữ liệu nguồn.</p>;
-  const data = aggregateDemand(points, all, group);
-  const total = points.reduce((sum, p) => sum + p.value, 0);
-  const peak = points.reduce((a, b) => a.value > b.value ? a : b);
-  const low = points.reduce((a, b) => a.value < b.value ? a : b);
-  return <>
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-      <Stat label="Tổng tiêu thụ" value={`${format(total)} TWh`} detail={`${points.length} tháng trong khoảng đã chọn`} />
-      <Stat label="Trung bình tháng" value={`${format(summary.mean)} TWh`} detail="Tính trên các tháng có dữ liệu" />
-      <Stat label="Tháng cao nhất" value={`${format(summary.max)} TWh`} detail={peak.month} />
-      <Stat label="Tháng thấp nhất" value={`${format(summary.min)} TWh`} detail={low.month} />
-    </div>
-    <Panel title="Tiêu thụ và so sánh cùng kỳ" description="Tổng điện năng theo kỳ. Đường nét đứt biểu diễn tổng của đúng các tháng tương ứng ở năm trước."
-      actions={<Selector label="Gộp dữ liệu" value={group} onChange={v => setGroup(v as Granularity)} options={[{ value: "month", label: "Theo tháng" }, { value: "quarter", label: "Theo quý" }, { value: "year", label: "Theo năm" }]} />}>
-      <ChartFrame label="Biểu đồ cột tổng tiêu thụ và đường so sánh cùng kỳ năm trước; chi tiết trong bảng bên dưới">
-        <ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-          <XAxis dataKey="period" minTickGap={35} tick={{ fontSize: 11 }} />
-          <YAxis width={65} tick={{ fontSize: 11 }} label={{ value: "TWh", position: "insideTopLeft", offset: -5 }} />
-          <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", borderRadius: 8, color: "var(--foreground)" }} formatter={v => `${format(Number(v))} TWh`} />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
-          <Bar dataKey="total" name="Tiêu thụ" fill="#f59e0b" radius={[3, 3, 0, 0]} maxBarSize={48} />
-          <Line dataKey="previous" name="Cùng kỳ năm trước" stroke="#3b82f6" strokeDasharray="5 4" strokeWidth={2} dot={false} connectNulls={false} />
-        </ComposedChart></ResponsiveContainer>
-      </ChartFrame>
-    </Panel>
-    <Panel title="Chi tiết tiêu thụ" description="Kỳ chưa đủ tháng vẫn hiển thị tổng thực có. YoY chỉ tính khi có đủ tháng đối chiếu; dấu — là chưa đủ dữ liệu."
-      actions={<ExportCsv filename={`consumption-${group}.csv`} headers={headers} rows={data.map(p => [p.period, p.count, p.total, p.average, p.previous, p.growth])} />}>
-      <DataTable caption="Chi tiết tiêu thụ trong khoảng đã lọc" headers={headers} rows={data.map(p => [p.period, `${p.count} tháng`, format(p.total), format(p.average), format(p.previous), p.growth === null ? "—" : `${p.growth > 0 ? "+" : ""}${format(p.growth)}%`])} />
-    </Panel>
-    <Panel title="Phân bố mức tiêu thụ" description="Histogram được tính bởi API phân tích theo khoảng thời gian đã chọn."><DistributionApiChart points={points} /></Panel>
-  </>;
-  }}</ApiResult>;
+function ConsumptionView({ points }: { points: { date: string; value: number }[] }) {
+  const [group, setGroup] = useState<Granularity>("day"); const params = rangeParams(points);
+  return <div className="space-y-5"><ApiResult endpoint="/api/analysis/summary" params={params} parse={parseSummary}>{summary => <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"><Stat label="Số quan sát" value={String(summary.sample_count)} detail={`${summary.start_date ?? "—"} – ${summary.end_date ?? "—"}`} /><Stat label="Nhu cầu trung bình" value={`${format(summary.mean)} ${summary.unit}`} detail="MW không được cộng thành MWh" /><Stat label="Quan sát thấp nhất" value={`${format(summary.minimum)} ${summary.unit}`} detail="Trong khoảng đã chọn" /><Stat label="Quan sát cao nhất" value={`${format(summary.maximum)} ${summary.unit}`} detail="Trong khoảng đã chọn" /></div>}</ApiResult>
+    <Panel title="Nhu cầu theo kỳ" description="Tuần/tháng hiển thị trung bình các quan sát MW trong kỳ. Dùng metric demand_energy (MWh) khi cần năng lượng.">
+      <Selector label="Kỳ tổng hợp" value={group} onChange={value => setGroup(value as Granularity)} options={[{ value: "day", label: "Ngày" }, { value: "week", label: "Tuần" }, { value: "month", label: "Tháng" }]} />
+      <ApiResult endpoint="/api/analysis/trend" params={{ ...params, metric: "demand", view: group }} parse={parseTrend}>{result => <div className="space-y-4">{!result.records.length ? <p role="status">Không có dữ liệu trong khoảng đã chọn.</p> : <><ChartFrame label={`Nhu cầu trung bình theo ${group}, ${result.unit}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={result.records}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="period" minTickGap={25} tick={{ fontSize: 11 }} /><YAxis width={70} /><Tooltip formatter={value => `${format(Number(value))} ${result.unit}`} /><Bar dataKey="value" name={`Nhu cầu (${result.unit})`} fill="#3b82f6" radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></ChartFrame>
+        <ExportCsv filename={`nem-consumption-${group}.csv`} headers={["Period", `Demand (${result.unit})`, "Sample count", "Coverage"]} rows={result.records.map(row => [row.period, row.value, row.sample_count, row.coverage_fraction])} /><DataTable caption="Nhu cầu NEM theo kỳ" headers={["Kỳ", `Nhu cầu (${result.unit})`, "Số mẫu", "Độ phủ"]} rows={result.records.map(row => [row.period, format(row.value), row.sample_count, row.coverage_fraction == null ? "—" : `${format(row.coverage_fraction * 100)}%`])} /></>}</div>}</ApiResult>
+    </Panel></div>;
 }
-export function ConsumptionAnalysis() {
-  return <AnalysisWorkspace kind="consumption">{(points, all) => <ConsumptionView points={points} all={all} />}</AnalysisWorkspace>;
-}
+export function ConsumptionAnalysis() { return <AnalysisWorkspace kind="consumption">{points => <ConsumptionView points={points} />}</AnalysisWorkspace>; }

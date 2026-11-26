@@ -12,31 +12,32 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useIsMounted } from "@/hooks/use-mounted";
 import { DemandDataGate, DataSourceStatus } from "@/components/dashboard/demand-data-provider";
-import type { DemandDataset } from "@/lib/demand-api";
+import { brisbaneDate, type DemandDataset } from "@/lib/demand-api";
 import type { DemandPoint } from "@/lib/analysis-data";
 
 export const format = (value: number | null, digits = 2) => value === null ? "—" : value.toLocaleString("vi-VN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 const tabs = [
-  { key: "consumption", title: "Consumption Analysis", description: "Theo dõi mức tiêu thụ, so sánh cùng kỳ và khám phá các giai đoạn cao điểm." },
-  { key: "trend", title: "Trend & Seasonality", description: "Quan sát xu hướng dài hạn và quy luật tiêu thụ theo tháng trong năm." },
-  { key: "correlation", title: "Correlation", description: "Khám phá mức độ liên hệ giữa các biến từ chuỗi tiêu thụ điện." },
+  { key: "consumption", title: "Consumption Analysis", description: "Tóm tắt nhu cầu daily MW trong khoảng ngày đã chọn." },
+  { key: "trend", title: "Trend & Seasonality", description: "Xem xu hướng theo ngày/tuần/tháng và mức trung bình theo weekday." },
+  { key: "correlation", title: "Correlation", description: "Khám phá mức độ liên hệ giữa các metric NEM trên ngày được căn chỉnh." },
 ];
 function AnalysisContent({ kind, children, dataset }: {
   kind: string;
   children: (points: DemandPoint[], all: DemandPoint[]) => ReactNode;
   dataset: DemandDataset;
 }) {
-  const first = dataset.records[0].month;
-  const last = dataset.records[dataset.records.length - 1].month;
+  const first = dataset.start_date!;
+  const last = dataset.end_date!;
   const [start, setStart] = useState(first);
   const [end, setEnd] = useState(last);
   const tab = tabs.find(t => t.key === kind)!;
   const invalid = !start || !end || start > end;
-  const points = invalid ? [] : dataset.records.filter(p => p.month >= start && p.month <= end);
+  const allPoints = dataset.records.map(p => ({ date: brisbaneDate(p.observed_at), value: p.value }));
+  const points = invalid ? [] : allPoints.filter(p => p.date >= start && p.date <= end);
   function reset() { setStart(first); setEnd(last); }
   return <>
     <div className="space-y-6 min-w-0">
-      <PageHeading title={tab.title} description={tab.description} icon={ChartNoAxesCombined} eyebrow="Phân tích dữ liệu · Việt Nam" />
+      <PageHeading title={tab.title} description={tab.description} icon={ChartNoAxesCombined} eyebrow="Phân tích Open Electricity NEM · Nhu cầu MW" />
       <nav aria-label="Các trang phân tích" className="flex flex-wrap gap-2">
         {tabs.map(t => <Link key={t.key} href={`/analysis/${t.key}`} aria-current={t.key === kind ? "page" : undefined}
           className={`rounded-lg border px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring ${t.key === kind ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
@@ -47,19 +48,19 @@ function AnalysisContent({ kind, children, dataset }: {
       <Card className="p-4 gap-4">
         <div className="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal className="size-4" /> Bộ lọc thời gian</div>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="space-y-1 text-sm"> <span className="block">Từ tháng</span>
-            <Input type="month" aria-label="Từ tháng" min={first} max={last} value={start} onChange={e => setStart(e.target.value)} aria-invalid={invalid} className="w-44" />
+          <label className="space-y-1 text-sm"> <span className="block">Từ ngày (Brisbane)</span>
+            <Input type="date" aria-label="Từ ngày Brisbane" min={first} max={last} value={start} onChange={e => setStart(e.target.value)} aria-invalid={invalid} className="w-44" />
           </label>
-          <label className="space-y-1 text-sm"> <span className="block">Đến tháng</span>
-            <Input type="month" aria-label="Đến tháng" min={first} max={last} value={end} onChange={e => setEnd(e.target.value)} aria-invalid={invalid} className="w-44" />
+          <label className="space-y-1 text-sm"> <span className="block">Đến ngày (Brisbane)</span>
+            <Input type="date" aria-label="Đến ngày Brisbane" min={first} max={last} value={end} onChange={e => setEnd(e.target.value)} aria-invalid={invalid} className="w-44" />
           </label>
-          <Button variant="outline" onClick={() => { setStart(dataset.records[Math.max(0, dataset.records.length - 12)].month); setEnd(last); }}>12 tháng gần nhất</Button>
+          <Button variant="outline" onClick={() => { const from = new Date(`${last}T12:00:00Z`); from.setUTCDate(from.getUTCDate() - 29); setStart(from.toISOString().slice(0, 10)); setEnd(last); }}>30 ngày gần nhất</Button>
           <Button variant="ghost" onClick={reset}><RotateCcw /> Đặt lại</Button>
         </div>
-        {invalid && <p role="alert" className="text-sm text-destructive">Vui lòng chọn đủ hai mốc; tháng bắt đầu phải trước hoặc bằng tháng kết thúc.</p>}
-        <p role="status" className="text-xs text-muted-foreground">Đang chọn {points.length} tháng · Mọi chỉ số, biểu đồ và bảng bên dưới cập nhật theo bộ lọc.</p>
+        {invalid && <p role="alert" className="text-sm text-destructive">Vui lòng chọn đủ hai mốc; ngày bắt đầu phải trước hoặc bằng ngày kết thúc.</p>}
+        <p role="status" className="text-xs text-muted-foreground">Đang chọn {points.length} quan sát · Giờ Australia/Brisbane · Nhu cầu được biểu thị bằng MW, không cộng MW thành điện năng.</p>
       </Card>
-      {!points.length ? <Card className="p-8 text-center items-center gap-3"><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Điều chỉnh khoảng thời gian hoặc khôi phục toàn bộ dữ liệu.</p><Button onClick={reset}>Khôi phục bộ lọc</Button></Card> : children(points, dataset.records)}
+      {!points.length ? <Card className="p-8 text-center items-center gap-3"><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Điều chỉnh khoảng thời gian hoặc khôi phục toàn bộ dữ liệu.</p><Button onClick={reset}>Khôi phục bộ lọc</Button></Card> : children(points, allPoints)}
     </div>
   </>;
 }

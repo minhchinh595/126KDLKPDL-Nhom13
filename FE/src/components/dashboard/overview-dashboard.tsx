@@ -1,135 +1,64 @@
 "use client";
 
 import { useState } from "react";
-import { PageHeading } from "@/components/shared/page-heading";
 import Link from "next/link";
-import { Activity, ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Flame, RotateCcw, Search, SlidersHorizontal, Zap } from "lucide-react";
+import { Activity, ArrowRight, CalendarDays, Flame, RotateCcw, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MetricCard } from "./metric-card";
 import { DemandDataGate, DataSourceStatus } from "./demand-data-provider";
 import type { DemandDataset } from "@/lib/demand-api";
+import { brisbaneDate } from "@/lib/demand-api";
 import { OverviewDistribution, OverviewSeasonality, OverviewTrendChart } from "./overview-charts";
-import { DataTable, ExportCsv, format, Panel, Selector } from "@/components/analysis/analysis-shared";
-import { DEMAND_LEVELS, filterDemand, monthlyChanges, summarizeDemand } from "@/lib/analysis-data";
-
+import { DataTable, ExportCsv, format, Panel } from "@/components/analysis/analysis-shared";
+import { filterDemand } from "@/lib/analysis-data";
 import { ApiResult } from "@/components/analysis/api-result";
-import { parseDashboard, parseSummary, rangeParams, type DashboardResult } from "@/lib/analytics-api";
-
+import { parseDashboard, parseDemandStatistics, rangeParams, type DashboardResult } from "@/lib/analytics-api";
 import { ForecastPreview } from "@/components/models/model-workspace";
 
-const csvHeaders = ["Tháng", "Quốc gia", "Tiêu thụ (TWh)", "MoM (%)", "YoY (%)", "Mức tiêu thụ"];
-const percent = (value: number | null) => value === null ? "—" : `${value > 0 ? "+" : ""}${format(value)}%`;
-const detailLink = "inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline underline-offset-4";
-
 function OverviewContent({ dataset, overview }: { dataset: DemandDataset; overview: DashboardResult }) {
-  const first = dataset.records[0].month;
-  const last = dataset.records[dataset.records.length - 1].month;
-  const [start, setStart] = useState(first);
-  const [end, setEnd] = useState(last);
-  const [compare, setCompare] = useState(true);
-  const [search, setSearch] = useState("");
-  const [level, setLevel] = useState("all");
-  const [sort, setSort] = useState("newest");
-  const [pageSize, setPageSize] = useState(10);
-  const [page, setPage] = useState(1);
+  const first = dataset.start_date ?? ""; const last = dataset.end_date ?? "";
+  const [start, setStart] = useState(first); const [end, setEnd] = useState(last);
   const invalid = !start || !end || start > end;
-  const points = filterDemand(dataset.records, start, end);
-  const summary = summarizeDemand(points, dataset.records);
-  const rows = monthlyChanges(points, dataset.records)
-    .filter(p => p.month.includes(search.trim()) && (level === "all" || p.level === level))
-    .sort((a, b) => sort === "oldest" ? a.month.localeCompare(b.month) : sort === "highest" ? b.value - a.value : sort === "lowest" ? a.value - b.value : b.month.localeCompare(a.month));
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const visible = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const latest = summary.latest;
-  function range(from: string, to: string) { setStart(from); setEnd(to); setPage(1); }
-  function reset() { range(first, last); setSearch(""); setLevel("all"); setSort("newest"); setPageSize(10); setCompare(true); }
-  function tableReset() { setSearch(""); setLevel("all"); setSort("newest"); setPage(1); }
-
-
+  const points = filterDemand(dataset.records.map(row => ({ date: brisbaneDate(row.observed_at), value: row.value })), start, end);
+  const observedAt = overview.latest_data_timestamp ? new Date(overview.latest_data_timestamp).toLocaleString("vi-VN", { timeZone: "Australia/Brisbane" }) : "—";
+  function reset() { setStart(first); setEnd(last); }
   return <div className="space-y-4 min-w-0">
-    <PageHeading compact title="Overview Dashboard" icon={Zap} eyebrow="Tổng quan · Việt Nam" description="Theo dõi tiêu thụ điện, xu hướng và dự báo từ dữ liệu thực tế." actions={<Button variant="outline" onClick={reset}><RotateCcw /> Đặt lại Dashboard</Button>} />
-
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-2xl font-semibold tracking-tight">Overview Dashboard</h1><p className="mt-1 text-sm text-muted-foreground">Nhu cầu điện NEM hằng ngày, các chỉ số thị trường và trạng thái dữ liệu.</p></div><Button variant="outline" onClick={reset}><RotateCcw /> Đặt lại khoảng ngày</Button></div>
     <DataSourceStatus data={dataset} />
-    <Card className="p-3 gap-2">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex items-center gap-2 self-center text-sm font-semibold lg:mr-2"><SlidersHorizontal className="size-4" /> Bộ lọc Dashboard</div>
-        <label className="space-y-1 text-sm"><span className="block">Từ tháng</span><Input className="h-9 w-40" type="month" aria-label="Từ tháng" min={first} max={last} value={start} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(e.target.value, end)} /></label>
-        <label className="space-y-1 text-sm"><span className="block">Đến tháng</span><Input className="h-9 w-40" type="month" aria-label="Đến tháng" min={first} max={last} value={end} aria-invalid={invalid} aria-describedby={invalid ? "overview-range-error" : undefined} onChange={e => range(start, e.target.value)} /></label>
-        <Button variant="outline" onClick={() => range(dataset.records[Math.max(0, dataset.records.length - 12)]?.month ?? first, last)}>12 tháng gần nhất</Button>
-        <Button variant="outline" onClick={() => range(`${last.slice(0, 4)}-01`, last)}>Năm dữ liệu mới nhất</Button>
-        <Button variant="ghost" onClick={() => range(first, last)}>Toàn bộ</Button>
-      </div>
-      {invalid && <p id="overview-range-error" role="alert" className="text-sm text-destructive">Chọn đủ hai mốc thời gian, tháng bắt đầu phải trước hoặc bằng tháng kết thúc.</p>}
-      <p role="status" className="text-xs text-muted-foreground">{points.length} tháng được chọn · KPI, biểu đồ và bảng cập nhật theo khoảng lọc.</p>
-    </Card>
-
-    {!points.length ? <Card className="p-8 items-center text-center gap-3"><CalendarDays className="size-8 text-muted-foreground" /><h2 className="font-semibold">Không có dữ liệu trong khoảng đã chọn</h2><p className="text-sm text-muted-foreground">Dữ liệu hiện có từ {first} đến {last}.</p><Button onClick={reset}>Khôi phục toàn bộ dữ liệu</Button></Card> : <ApiResult endpoint="/api/analysis/summary" params={rangeParams(points)} parse={parseSummary}>{analysis => <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <MetricCard title="Tiêu thụ tháng cuối kỳ" value={format(start === first && end === last ? overview.latest_demand_twh : latest!.value)} unit="TWh" trend={latest!.yoy === null ? undefined : Number(latest!.yoy.toFixed(2))} description={`${latest!.month} · ${latest!.yoy === null ? "Chưa có cùng kỳ" : "so với cùng kỳ năm trước"}`} icon={Zap} variant="amber" />
-        <MetricCard title="Tổng tiêu thụ trong kỳ" value={format(summary.total)} unit="TWh" description={`${analysis.count} tháng có dữ liệu`} icon={CalendarDays} variant="purple" />
-        <MetricCard title="Tiêu thụ trung bình tháng" value={format(start === first && end === last ? overview.mean_demand_twh : analysis.mean)} unit="TWh" description="Trung bình của khoảng đã chọn" icon={Activity} variant="blue" />
-        <MetricCard title="Tháng tiêu thụ cao nhất" value={format(start === first && end === last ? overview.maximum_demand_twh : analysis.max)} unit="TWh" description={`Ghi nhận tại ${summary.peak!.month}`} icon={Flame} variant="emerald" />
-      </div>
-
-      <Panel title="Xu hướng tiêu thụ điện" description={`${points[0].month} – ${points[points.length - 1].month} · TWh/tháng. Cùng kỳ được tra từ toàn bộ lịch sử.`}
-        actions={<label className="inline-flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={compare} onChange={e => setCompare(e.target.checked)} className="size-4 accent-amber-500" /> So sánh cùng kỳ năm trước</label>}>
-        <OverviewTrendChart points={points} all={dataset.records} compare={compare} />
-        <Link href="/analysis/consumption" className={detailLink}>Mở Consumption Analysis <ArrowRight className="size-3" /></Link>
-      </Panel>
-
-      <details className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm">
-        <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">Thông tin kho dữ liệu · {overview.dataset_count} dataset · {overview.model_run_count} lượt chạy mô hình</summary>
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 pb-1 text-xs text-muted-foreground">
-          <p>{overview.record_count} tháng · {overview.start_month}–{overview.latest_month}</p>
-          <p>Cập nhật: {overview.data_updated_at ? new Date(overview.data_updated_at).toLocaleString("vi-VN") : "Chưa có thời gian cập nhật"}</p>
-          <p>Tháng mới nhất: {format(overview.latest_demand_twh)} TWh · MoM: {percent(overview.change_from_previous_month_pct)}</p>
-          <p>Thông tin toàn bộ kho dữ liệu, độc lập với bộ lọc.</p>
-        </div>
-      </details>
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <Panel title="Quy luật tiêu thụ theo tháng" description="Trung bình các tháng cùng tên trong khoảng lọc; chưa điều chỉnh xu hướng giữa các năm.">
-          <OverviewSeasonality points={points} />
-          {points.length < 24 && <p className="text-xs text-muted-foreground">Dưới 24 tháng dữ liệu: chưa đủ nhiều chu kỳ để kết luận về mùa vụ.</p>}
-          <Link href="/analysis/trend" className={detailLink}>Mở Trend & Seasonality <ArrowRight className="size-3" /></Link>
-        </Panel>
-        <Panel title="Phân bố mức tiêu thụ" description="Histogram số tháng theo khoảng tiêu thụ, được trả về từ API phân tích.">
-          <OverviewDistribution points={points} />
-
-        </Panel>
-      </div>
-
-      <Panel title="Điểm nổi bật trong kỳ" description="Các nhận xét được tính lại khi đổi khoảng thời gian.">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="rounded-lg bg-muted/40 p-4 space-y-2"><p className="font-medium">Tháng thấp nhất</p><p className="text-muted-foreground">{summary.low!.month}: <strong className="text-foreground">{format(summary.low!.value)} TWh</strong>. Chênh lệch đỉnh / đáy: {format(summary.peak!.value - summary.low!.value)} TWh.</p></div>
-          <div className="rounded-lg bg-muted/40 p-4 space-y-2"><p className="font-medium">Biến động tháng cuối kỳ</p><p className="text-muted-foreground">MoM: <strong className="text-foreground">{percent(latest!.mom)}</strong> · YoY: <strong className="text-foreground">{percent(latest!.yoy)}</strong>. Dấu — nghĩa là chưa đủ dữ liệu đối chiếu.</p></div>
-          <div className="rounded-lg bg-muted/40 p-4 space-y-2"><p className="font-medium">Khám phá mối liên hệ</p><p className="text-muted-foreground">So sánh mức tiêu thụ với tháng trước hoặc cùng kỳ năm trước.</p><Link href="/analysis/correlation" className={detailLink}>Mở Correlation <ArrowRight className="size-3" /></Link></div>
-        </div>
-      </Panel>
-
-      <Panel title="Dữ liệu tiêu thụ chi tiết" description="Bộ lọc bên dưới chỉ áp dụng cho bảng và CSV; không thay đổi KPI hay biểu đồ. MoM/YoY dùng lịch sử đầy đủ."
-        actions={<ExportCsv filename={`overview-${start}-${end}.csv`} headers={csvHeaders} rows={rows.map(p => [p.month, "Việt Nam", p.value, p.mom, p.yoy, DEMAND_LEVELS.find(l => l.key === p.level)!.label])} />}>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="space-y-1 text-sm"><span className="flex items-center gap-1 text-muted-foreground"><Search className="size-3" /> Tìm tháng</span><Input aria-label="Tìm tháng trong bảng" placeholder="Ví dụ: 2026 hoặc 2026-09" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} className="w-60 max-w-full" /></label>
-          <Selector label="Mức tiêu thụ" value={level} onChange={v => { setLevel(v); setPage(1); }} options={[{ value: "all", label: "Tất cả mức" }, ...DEMAND_LEVELS.map(l => ({ value: l.key, label: `${l.label} · ${l.range}` }))]} />
-          <Selector label="Sắp xếp" value={sort} onChange={v => { setSort(v); setPage(1); }} options={[{ value: "newest", label: "Tháng mới nhất" }, { value: "oldest", label: "Tháng cũ nhất" }, { value: "highest", label: "Tiêu thụ giảm dần" }, { value: "lowest", label: "Tiêu thụ tăng dần" }]} />
-          <Selector label="Số dòng / trang" value={String(pageSize)} onChange={v => { setPageSize(Number(v)); setPage(1); }} options={[10, 20, 50].map(n => ({ value: String(n), label: String(n) }))} />
-        </div>
-        {rows.length ? <DataTable caption="Tiêu thụ hàng tháng và tăng trưởng so với tháng trước, cùng kỳ năm trước" headers={csvHeaders} rows={visible.map(p => [p.month, "Việt Nam", format(p.value), percent(p.mom), percent(p.yoy), <span key={p.month} className="inline-flex items-center gap-2"><span className="size-2 rounded-full" style={{ backgroundColor: DEMAND_LEVELS.find(l => l.key === p.level)!.color }} />{DEMAND_LEVELS.find(l => l.key === p.level)!.label}</span>])} /> : <div role="status" className="py-8 text-center space-y-3"><p className="text-sm text-muted-foreground">Không có bản ghi phù hợp với bộ lọc bảng.</p><Button variant="outline" onClick={tableReset}>Xóa bộ lọc bảng</Button></div>}
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-          <p role="status">{rows.length ? `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, rows.length)}` : "0"} / {rows.length} bản ghi · CSV xuất toàn bộ kết quả lọc</p>
-          <div className="flex items-center gap-2"><Button aria-label="Trang trước" variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}><ChevronLeft /></Button><span>Trang {currentPage}/{pageCount}</span><Button aria-label="Trang sau" variant="outline" size="sm" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}><ChevronRight /></Button></div>
-        </div>
-      </Panel>
-    </>}</ApiResult>}
-
-    <Panel title="Dự báo nhu cầu mới nhất" description="Kết quả mô hình được lưu trên Gateway, độc lập với bộ lọc lịch sử."><ForecastPreview /></Panel>
+    <Card className="p-3 gap-2"><div className="flex flex-wrap items-end gap-3"><div className="flex items-center gap-2 self-center text-sm font-semibold lg:mr-2"><CalendarDays className="size-4" /> Khoảng ngày Brisbane</div>
+      <label className="space-y-1 text-sm"><span className="block">Từ ngày</span><Input className="h-9 w-40" type="date" min={first} max={last} value={start} aria-invalid={invalid} onChange={event => setStart(event.target.value)} /></label>
+      <label className="space-y-1 text-sm"><span className="block">Đến ngày</span><Input className="h-9 w-40" type="date" min={first} max={last} value={end} aria-invalid={invalid} onChange={event => setEnd(event.target.value)} /></label>
+      <Button variant="outline" onClick={() => { const from = new Date(`${last}T12:00:00Z`); from.setUTCDate(from.getUTCDate() - 29); setStart(from.toISOString().slice(0, 10)); setEnd(last); }}>30 ngày gần nhất</Button>
+    </div>{invalid && <p role="alert" className="text-sm text-destructive">Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.</p>}<p role="status" className="text-xs text-muted-foreground">{points.length} quan sát demand trong khoảng · đơn vị MW · timezone Australia/Brisbane.</p></Card>
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <MetricCard title="Nhu cầu ngày mới nhất" value={format(overview.latest_daily_demand_mw)} unit="MW" description="Theo dữ liệu demand NEM" icon={Zap} variant="amber" />
+      <MetricCard title="Nhu cầu trung bình ngày" value={format(overview.average_daily_demand_mw)} unit="MW" description="Theo dữ liệu NEM hiện có" icon={Activity} variant="purple" />
+      <MetricCard title="Nhu cầu thấp nhất ngày" value={format(overview.minimum_daily_demand_mw)} unit="MW" description="Theo dữ liệu NEM hiện có" icon={CalendarDays} variant="blue" />
+      <MetricCard title="Nhu cầu cao nhất ngày" value={format(overview.maximum_daily_demand_mw)} unit="MW" description="Theo dữ liệu NEM hiện có" icon={Flame} variant="emerald" />
+    </div>
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <MetricCard title="Tỷ trọng năng lượng tái tạo mới nhất" value={format(overview.latest_renewable_proportion_percent)} unit="%" description="Dữ liệu daily network-level" icon={Activity} />
+      <MetricCard title="Giá điện mới nhất" value={format(overview.latest_price_per_mwh)} unit="$/MWh" description="Có thể âm theo giá thị trường" icon={Zap} />
+      <MetricCard title="Tổng số bản ghi" value={overview.total_observations.toLocaleString("vi-VN")} description={`${dataset.dataset_name} · ${dataset.interval} · Thời điểm dữ liệu mới nhất: ${observedAt}`} icon={CalendarDays} />
+    </div>
+    {!invalid && points.length > 0 && <ApiResult endpoint="/api/electricity/demand/statistics" params={{ ...rangeParams(points), interval: "1d" }} parse={parseDemandStatistics}>{statistics => <Panel title="Thống kê nhu cầu trong khoảng chọn" description={`${start} – ${end} · trung bình MW/quan sát`}><div className="grid grid-cols-2 xl:grid-cols-4 gap-4"><MetricCard title="Số quan sát" value={statistics.count} description="Observation được trả về, không nội suy" icon={CalendarDays} /><MetricCard title="Trung bình" value={format(statistics.mean)} unit="MW" description="Gateway NEM demand statistics" icon={Activity} /><MetricCard title="Thấp nhất" value={format(statistics.minimum)} unit="MW" description="Trong khoảng chọn" icon={Zap} /><MetricCard title="Cao nhất" value={format(statistics.maximum)} unit="MW" description="Trong khoảng chọn" icon={Flame} /></div></Panel>}</ApiResult>}
+    {!invalid && points.length > 0 && <Panel title="Xu hướng nhu cầu điện" description="Chuỗi daily MW; các giá trị tuần/tháng là mức trung bình, không cộng MW thành MWh."><OverviewTrendChart points={points} /></Panel>}
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <Panel title="Mẫu theo ngày trong tuần" description="Trung bình theo weekday; đây không phải seasonality theo tháng trong năm."><OverviewSeasonality points={points} /></Panel>
+      <Panel title="Phân bố nhu cầu hằng ngày" description="Histogram từ NEM Analysis API, đơn vị MW."><OverviewDistribution points={points} /></Panel>
+    </div>
+    <Panel title="Quan sát nhu cầu chi tiết" description="Ngày được định dạng theo Australia/Brisbane; danh sách dựa trên dữ liệu Gateway.">
+      <ExportCsv filename={`nem-demand-${start}-${end}.csv`} headers={["Ngày Brisbane", "Dataset", "Network", "Metric", "Interval", "Demand (MW)"]} rows={points.map(point => [point.date, dataset.dataset_name, dataset.network_code, dataset.metric, dataset.interval, point.value])} />
+      <DataTable caption="Nhu cầu NEM theo ngày" headers={["Ngày Brisbane", "Nhu cầu (MW)"]} rows={[...points].reverse().slice(0, 100).map(point => [point.date, format(point.value)])} />
+      <p className="text-xs text-muted-foreground">Hiển thị tối đa 100 ngày gần nhất trong bảng; CSV xuất toàn bộ khoảng ngày đã chọn.</p>
+    </Panel>
+    <Panel title="Dự báo nhu cầu mới nhất" description="Kết quả model đã lưu trên Gateway; không tạo dự báo giả khi chưa có run hoàn tất."><ForecastPreview /></Panel>
+    <Link href="/analysis/trend" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline underline-offset-4">Mở phân tích chi tiết <ArrowRight className="size-3" /></Link>
   </div>;
 }
 
 export function OverviewDashboard() {
-  return <DemandDataGate>{data => <ApiResult endpoint="/api/dashboard/overview" parse={parseDashboard}>{overview => <OverviewContent dataset={data} overview={overview} />}</ApiResult>}</DemandDataGate>;
+  return <DemandDataGate>{dataset => <ApiResult endpoint="/api/dashboard/overview" parse={parseDashboard}>{overview => <OverviewContent dataset={dataset} overview={overview} />}</ApiResult>}</DemandDataGate>;
 }

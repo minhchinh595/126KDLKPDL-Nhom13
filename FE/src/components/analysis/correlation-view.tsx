@@ -1,61 +1,28 @@
 "use client";
 
-import { useState } from "react";
-import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
-import { pairedObservations, type DemandPoint, type Variable } from "@/lib/analysis-data";
-import { CORRELATION_FEATURES, parseCorrelation, rangeParams, type CorrelationFeature } from "@/lib/analytics-api";
+import { Scatter, ScatterChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { parseCorrelation, parseScatter, rangeParams } from "@/lib/analytics-api";
+import type { DemandPoint } from "@/lib/analysis-data";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
 import { ApiResult } from "./api-result";
+import { useState } from "react";
 
-const labels: Record<CorrelationFeature, string> = { demand: "Tiêu thụ hiện tại", previous_month: "Tiêu thụ tháng trước", previous_year: "Tiêu thụ cùng kỳ năm trước" };
-const variables: Record<CorrelationFeature, Variable> = { demand: "demand", previous_month: "previousMonth", previous_year: "previousYear" };
-const options = CORRELATION_FEATURES.map(value => ({ value, label: labels[value] }));
 function CorrelationView({ points }: { points: DemandPoint[] }) {
-  const [x, setX] = useState<CorrelationFeature>("previous_month");
-  const [y, setY] = useState<CorrelationFeature>("demand");
-  // The public API builds lag variables within the filtered range. Match that scope for scatter points.
-  const observations = pairedObservations(points, points, variables[x], variables[y]);
-  const headers = ["Tháng", `${labels[x]} (TWh)`, `${labels[y]} (TWh)`];
-  return <>
-    <Panel title="Chọn biến phân tích" description="API cung cấp Pearson cho ba biến tiêu thụ. Các biến trễ chỉ dùng lịch sử nằm trong khoảng lọc.">
-      <div className="flex flex-wrap gap-4">
-        <Selector label="Biến trục X" value={x} onChange={value => setX(value as CorrelationFeature)} options={options.filter(option => option.value !== y)} />
-        <Selector label="Biến trục Y" value={y} onChange={value => setY(value as CorrelationFeature)} options={options.filter(option => option.value !== x)} />
-      </div>
-    </Panel>
-    <ApiResult endpoint="/api/analysis/correlation" params={rangeParams(points)} parse={parseCorrelation}>{result => {
-      const r = result.matrix[x][y], count = result.pair_counts[x][y];
-      const matching = count === observations.length;
-      return <div className="space-y-6">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Stat label="Pearson r từ API" value={format(r, 6)} detail={r === null ? "Chưa đủ cặp hoặc biến không thay đổi" : r > 0 ? "Tương quan thuận" : r < 0 ? "Tương quan nghịch" : "Không có liên hệ tuyến tính"} />
-          <Stat label="Số cặp hợp lệ từ API" value={String(count)} detail={`${labels[x]} ↔ ${labels[y]}`} />
-          <Stat label="Phương pháp" value="Pearson" detail="Backend chưa cung cấp Spearman hoặc biến tháng trong năm" />
-        </div>
-        <Panel title="Biểu đồ phân tán" description={`X: ${labels[x]} · Y: ${labels[y]} · TWh`}>
-          {!matching ? <p role="alert" className="text-sm text-destructive">Số cặp giữa dữ liệu nguồn và kết quả phân tích không khớp. Hãy bấm Tải lại từ API để đồng bộ dữ liệu.</p> : !observations.length ? <p role="status" className="py-8 text-center text-muted-foreground">Không có cặp dữ liệu hợp lệ trong khoảng lọc.</p> : <ChartFrame label={`Biểu đồ phân tán ${labels[x]} và ${labels[y]}`}>
-            <ResponsiveContainer width="100%" height="100%"><ScatterChart margin={{ top: 20, right: 20, bottom: 28, left: 15 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis type="number" dataKey="x" domain={["auto", "auto"]} tick={{ fontSize: 11 }} label={{ value: "X (TWh)", position: "bottom", offset: 10 }} />
-              <YAxis type="number" dataKey="y" domain={["auto", "auto"]} width={60} tick={{ fontSize: 11 }} label={{ value: "Y (TWh)", angle: -90, position: "insideLeft" }} />
-              <Tooltip content={({ active, payload }) => {
-                const point = payload?.[0]?.payload as { month: string; x: number; y: number } | undefined;
-                return active && point ? <div className="rounded-lg border border-border bg-card p-3 text-xs space-y-1"><p className="font-semibold">Tháng {point.month}</p><p>{labels[x]}: {format(point.x)} TWh</p><p>{labels[y]}: {format(point.y)} TWh</p></div> : null;
-              }} />
-              <Scatter data={observations} name="Các cặp từ dữ liệu API" fill="#3b82f6" fillOpacity={0.7} />
-            </ScatterChart></ResponsiveContainer>
-          </ChartFrame>}
-          <p className="text-sm text-muted-foreground">Hệ số được lấy từ API phân tích. Điểm scatter được ghép từ dữ liệu tiêu thụ vì API chưa trả danh sách cặp. Tương quan không chứng minh quan hệ nhân quả.</p>
-        </Panel>
-        <Panel title="Ma trận Pearson từ API" description="Số trong ngoặc là số cặp hợp lệ; dấu — nghĩa là chưa tính được hệ số.">
-          <DataTable caption="Ma trận tương quan từ API" headers={["Biến", ...result.features.map(feature => labels[feature])]} rows={result.features.map(a => [labels[a], ...result.features.map(b => `${format(result.matrix[a][b], 6)} (${result.pair_counts[a][b]})`)])} />
-          <ExportCsv filename="correlation-matrix-api.csv" headers={["Biến X", "Biến Y", "Pearson r", "Số cặp"]} rows={result.features.flatMap(a => result.features.map(b => [labels[a], labels[b], result.matrix[a][b], result.pair_counts[a][b]]))} />
-        </Panel>
-        {matching && <Panel title="Các cặp quan sát" actions={<ExportCsv filename={`correlation-${x}-${y}.csv`} headers={headers} rows={observations.map(point => [point.month, point.x, point.y])} />}>
-          <DataTable caption="Các cặp dữ liệu dùng vẽ scatter" headers={headers} rows={observations.map(point => [point.month, format(point.x), format(point.y)])} />
-        </Panel>}
-      </div>;
-    }}</ApiResult>
-  </>;
+  const [x, setX] = useState("demand"), [y, setY] = useState("price");
+  const params = rangeParams(points);
+  return <ApiResult endpoint="/api/analysis/correlation" params={params} parse={parseCorrelation}>{result => {
+    const metrics = Object.keys(result.metrics);
+    if (!metrics.length) return <p role="status">Backend chưa có cặp metric đủ điều kiện tương quan.</p>;
+    const selectedX = metrics.includes(x) ? x : metrics[0], selectedY = metrics.includes(y) ? y : metrics.find(metric => metric !== selectedX) ?? metrics[0];
+    const count = result.pair_counts[selectedX]?.[selectedY] ?? 0, coefficient = result.matrix[selectedX]?.[selectedY] ?? null;
+    const labels = (metric: string) => `${metric} (${result.metrics[metric]?.unit ?? "unit n/a"})`;
+    return <div className="space-y-6">
+      <Panel title="Chọn metric" description="Các hệ số và scatter được cung cấp trực tiếp bởi NEM Analysis API."><div className="flex flex-wrap gap-4"><Selector label="Trục X" value={selectedX} onChange={setX} options={metrics.filter(metric => metric !== selectedY).map(metric => ({ value: metric, label: labels(metric) }))} /><Selector label="Trục Y" value={selectedY} onChange={setY} options={metrics.filter(metric => metric !== selectedX).map(metric => ({ value: metric, label: labels(metric) }))} /></div></Panel>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4"><Stat label="Pearson r" value={format(coefficient, 6)} detail={coefficient == null ? "Không đủ cặp hoặc không biến thiên" : coefficient > 0 ? "Tương quan thuận" : coefficient < 0 ? "Tương quan nghịch" : "Tương quan tuyến tính bằng 0"} /><Stat label="Số ngày căn chỉnh" value={String(count)} detail={`${labels(selectedX)} ↔ ${labels(selectedY)}`} /><Stat label="Phạm vi ma trận" value={String(result.sample_dates)} detail={result.alignment} /></div>
+      <p className="text-xs text-muted-foreground">Diễn giải Pearson r: giá trị gần +1 biểu thị tương quan tuyến tính dương mạnh, gần −1 biểu thị tương quan tuyến tính âm mạnh, còn gần 0 biểu thị tương quan tuyến tính yếu. Tương quan không chứng minh quan hệ nhân quả.</p>
+      <Panel title="Scatter theo ngày" description="Điểm và hệ số được tính trên cùng request Backend; tương quan không chứng minh quan hệ nhân quả."><ApiResult endpoint="/api/analysis/scatter" params={{ ...params, x_metric: selectedX, y_metric: selectedY }} parse={parseScatter}>{scatter => !scatter.points.length ? <p role="status">Không có cặp observation hợp lệ.</p> : <ChartFrame label={`Scatter ${selectedX} và ${selectedY}`}><ResponsiveContainer width="100%" height="100%"><ScatterChart><CartesianGrid strokeDasharray="3 3" /><XAxis type="number" dataKey="x" name={labels(selectedX)} /><YAxis type="number" dataKey="y" name={labels(selectedY)} /><Tooltip cursor={{ strokeDasharray: "3 3" }} /><Scatter data={scatter.points} name="Ngày NEM" fill="#3b82f6" /></ScatterChart></ResponsiveContainer></ChartFrame>}</ApiResult></Panel>
+      <Panel title="Ma trận tương quan" description="Unit được giữ riêng theo metric; không quy đổi đơn vị ngầm."><DataTable caption="Ma trận Pearson NEM" headers={["Metric", ...metrics.map(labels)]} rows={metrics.map(row => [labels(row), ...metrics.map(column => `${format(result.matrix[row]?.[column] ?? null, 5)} (${result.pair_counts[row]?.[column] ?? 0})`)])} /><ExportCsv filename="nem-correlation-matrix.csv" headers={["Metric X", "Metric Y", "Pearson r", "Pair count"]} rows={metrics.flatMap(row => metrics.map(column => [row, column, result.matrix[row]?.[column] ?? null, result.pair_counts[row]?.[column] ?? 0]))} /></Panel>
+    </div>;
+  }}</ApiResult>;
 }
 export function CorrelationAnalysis() { return <AnalysisWorkspace kind="correlation">{points => <CorrelationView points={points} />}</AnalysisWorkspace>; }

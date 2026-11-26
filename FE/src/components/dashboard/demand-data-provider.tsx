@@ -38,17 +38,17 @@ export function DemandDataGate({ children }: { children: (data: DemandDataset) =
   if (state.status === "loading") return <div role="status" aria-label="Đang tải dữ liệu biểu đồ từ API"><DashboardSkeleton /></div>;
   if (state.status === "error" && state.httpStatus === 401) return <DemandLogin onSuccess={reload} />;
   if (state.status === "error") return <Card className="p-6 space-y-3" role="alert"><h1 className="text-xl font-semibold">Không tải được dữ liệu biểu đồ</h1><p className="text-sm text-muted-foreground">{state.message}</p><Button onClick={reload}>Thử lại kết nối API</Button></Card>;
-  if (!state.data.records.length) return <Card className="p-6 space-y-3" role="status"><h1 className="text-xl font-semibold">API chưa có dữ liệu tiêu thụ</h1><p className="text-sm text-muted-foreground">Nguồn: {state.data.source}. Hãy kiểm tra dataset trên backend.</p><Button onClick={reload}>Tải lại dữ liệu</Button></Card>;
+  if (!state.data.records.length) return <Card className="p-6 space-y-3" role="status"><h1 className="text-xl font-semibold">NEM chưa có dữ liệu nhu cầu hằng ngày</h1><p className="text-sm text-muted-foreground">Dataset: {state.data.dataset_name} · Network {state.data.network_code} · {state.data.interval} · {state.data.unit ?? "đơn vị chưa có dữ liệu"}.</p><Button onClick={reload}>Tải lại dữ liệu</Button></Card>;
   return children(state.data);
 }
 
 export function DataSourceStatus({ data }: { data: DemandDataset }) {
   const { reload } = useDemandData();
-  const monthLabel = (month: string | null) => month ? month.split("-").reverse().join("/") : "—";
+  const dateLabel = (day: string | null) => day ? new Date(`${day}T12:00:00Z`).toLocaleDateString("vi-VN", { timeZone: "Australia/Brisbane" }) : "—";
   return <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
     <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-      <p className="inline-flex flex-wrap items-center gap-2 py-1"><Database className="size-3.5 text-primary" /><span><strong className="font-semibold text-foreground">{data.total} tháng</strong> · {monthLabel(data.start_month)}–{monthLabel(data.end_month)} · {data.unit}</span></p>
-      <details className="min-w-0"><summary className="cursor-pointer py-1 hover:text-foreground">Chi tiết nguồn</summary><p className="max-w-lg break-words pb-1">{data.iso3} · Nguồn: {data.source}</p></details>
+      <p className="inline-flex flex-wrap items-center gap-2 py-1"><Database className="size-3.5 text-primary" /><span><strong className="font-semibold text-foreground">{data.total_matches} quan sát</strong> · {dateLabel(data.start_date)}–{dateLabel(data.end_date)} · {data.unit ?? "—"}</span></p>
+      <details className="min-w-0"><summary className="cursor-pointer py-1 hover:text-foreground">Chi tiết nguồn</summary><p className="max-w-lg break-words pb-1">{data.dataset_name} · Network {data.network_code} · {data.metric} · {data.interval} · {data.timezone}</p></details>
     </div>
     <Button variant="ghost" size="sm" onClick={reload}><RefreshCw className="size-3.5" />Tải lại từ API</Button>
   </div>;

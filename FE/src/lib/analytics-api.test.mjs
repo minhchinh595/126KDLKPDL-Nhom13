@@ -1,117 +1,125 @@
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
 
-const compile = text => ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const moduleUrl = text => `data:text/javascript;base64,${Buffer.from(text).toString("base64")}`;
+const compile = source => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const moduleUrl = source => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const demandUrl = moduleUrl(compile(await readFile(new URL("./demand-api.ts", import.meta.url), "utf8")));
 const source = compile(await readFile(new URL("./analytics-api.ts", import.meta.url), "utf8")).replace('from "./demand-api"', `from "${demandUrl}"`);
-const { fetchAnalytics, analyticsPath, rangeParams, parseSummary, parseTrend, parseSeasonality, parseCorrelation, parseDistribution, parseDashboard } = await import(moduleUrl(source));
+const api = await import(moduleUrl(source));
 
-const summary = () => ({ unit: "TWh", count: 2, start_month: "2025-01", end_month: "2025-02", mean: 15, median: 15, min: 10, max: 20 });
-const trend = () => ({ unit: "TWh", method: "trailing_rolling_mean", window_months: 3, records: [{ month: "2025-01", value: 10, trend: null }] });
-const seasonal = () => ({ unit: "TWh", method: "group_by_calendar_month", records: Array.from({ length: 12 }, (_, i) => ({ month_number: i + 1, count: 0, mean: null, median: null, min: null, max: null })) });
+const summary = () => ({ metric: "demand", interval: "1d", unit: "MW", sample_count: 2, start_date: "2025-01-01", end_date: "2025-01-02", mean: 150, median: 150, minimum: 100, maximum: 200 });
+const demandStatistics = () => ({ metric: "demand", interval: "1d", unit: "MW", count: 2, mean: 150, minimum: 100, maximum: 200, coverage: { returned_count: 2 } });
+const trend = () => ({ metric: "demand", unit: "MW", view: "week", aggregation: "mean", records: [{ period: "2024-12-30", value: 150, sample_count: 2, weighted_sample_count: 2, expected_days: 7, coverage_fraction: 2 / 7 }] });
+const seasonality = () => ({ metric: "demand", unit: "MW", method: "weekday_mean", limitation: "Daily coverage only", records: Array.from({ length: 7 }, (_, index) => ({ weekday: index + 1, count: index === 2 ? 2 : 0, mean: index === 2 ? 150 : null })) });
 const correlation = () => {
-  const features = ["demand", "previous_month", "previous_year"];
-  return { unit: "TWh", method: "pearson", features, matrix: Object.fromEntries(features.map(a => [a, Object.fromEntries(features.map(b => [b, a === b ? 1 : null]))])), pair_counts: Object.fromEntries(features.map(a => [a, Object.fromEntries(features.map(b => [b, a === b ? 3 : 0]))])) };
+  const metrics = { demand: { unit: "MW" }, price: { unit: "$/MWh" } };
+  return { metrics, alignment: "exact_date", sample_dates: 2, matrix: { demand: { demand: 1, price: 0.5 }, price: { demand: 0.5, price: 1 } }, pair_counts: { demand: { demand: 2, price: 2 }, price: { demand: 2, price: 2 } } };
 };
-const distribution = () => ({ unit: "TWh", count: 2, bins: [{ start: 10, end: 20, count: 2 }] });
-const overview = () => ({ unit: "TWh", record_count: 2, start_month: "2025-01", latest_month: "2025-02", mean_demand_twh: 15, minimum_demand_twh: 10, maximum_demand_twh: 20, latest_demand_twh: 20, change_from_previous_month_pct: 100, dataset_count: 1, model_run_count: 0, data_updated_at: "2025-02-01T00:00:00Z" });
-const endpoints = [
-  ["/api/dashboard/overview", parseDashboard, overview, {}],
-  ["/api/analysis/summary", parseSummary, summary, { start_month: "2025-01", end_month: "2025-02" }],
-  ["/api/analysis/trend", parseTrend, trend, { start_month: "2025-01", end_month: "2025-02", window_months: 6 }],
-  ["/api/analysis/seasonality", parseSeasonality, seasonal, { start_month: "2025-01", end_month: "2025-02" }],
-  ["/api/analysis/correlation", parseCorrelation, correlation, { start_month: "2025-01", end_month: "2025-02" }],
-  ["/api/analysis/distribution", parseDistribution, distribution, { start_month: "2025-01", end_month: "2025-02", bins: 5 }],
-];
-for (const [endpoint, parse, fixture, params] of endpoints) {
-  test(`${endpoint} uses cookies, correct parameters and actual returned values`, async t => {
-    t.mock.method(globalThis, "fetch", async (url, options) => {
-      const parsedUrl = new URL(url);
-      assert.equal(parsedUrl.pathname, endpoint);
-      for (const [key, value] of Object.entries(params)) assert.equal(parsedUrl.searchParams.get(key), String(value));
-      assert.equal(options.credentials, "include"); assert.equal(options.cache, "no-store");
-      return Response.json(fixture());
-    });
-    assert.deepEqual(await fetchAnalytics(endpoint, params, parse, { baseUrl: "http://test.local/" }), fixture());
+const distribution = () => ({ metric: "demand", interval: "1d", unit: "MW", sample_count: 2, bins: [{ start: 100, end: 150, count: 1 }, { start: 150, end: 200, count: 1 }] });
+const scatter = () => ({ x: { metric: "demand", unit: "MW", interval: "1d" }, y: { metric: "price", unit: "$/MWh", interval: "1d" }, sample_count: 1, points: [{ date: "2025-01-01", x: 100, y: 50 }] });
+const dashboard = () => ({ dataset_name: "Open Electricity NEM", dataset_status: "ready", total_observations: 365, latest_daily_demand_mw: 200, average_daily_demand_mw: 150, minimum_daily_demand_mw: 100, maximum_daily_demand_mw: 200, latest_renewable_proportion_percent: 34.5, latest_price_per_mwh: 50, latest_data_timestamp: "2025-01-02T00:00:00+10:00", timezone: "Australia/Brisbane" });
+
+test("Brisbane date range uses Gateway half-open start_at/end_at parameters", () => {
+  assert.deepEqual(api.rangeParams([{ date: "2025-01-01" }, { date: "2025-01-03" }]), { start_at: "2025-01-01T00:00:00+10:00", end_at: "2025-01-04T00:00:00+10:00" });
+  assert.deepEqual(api.rangeParams([]), {});
+  assert.equal(api.analyticsPath("/api/analysis/trend", { view: "week", start_at: "2025-01-01" }), api.analyticsPath("/api/analysis/trend", { start_at: "2025-01-01", view: "week" }));
+});
+
+test("NEM summary, trend and weekday seasonality parsers preserve API values", () => {
+  assert.deepEqual(api.parseSummary(summary()), summary());
+  assert.deepEqual(api.parseDemandStatistics(demandStatistics()), demandStatistics());
+  assert.deepEqual(api.parseTrend(trend()), trend());
+  assert.deepEqual(api.parseSeasonality(seasonality()), seasonality());
+  assert.deepEqual(seasonality().records.map(row => api.seasonalityWeekdayLabel(row.weekday)), ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]);
+  assert.equal(api.seasonalityWeekdayLabel(7), "Chủ Nhật");
+  assert.equal(api.parseTrend(trend()).records[0].coverage_fraction, 2 / 7);
+});
+
+test("weekday seasonality presents all ISO weekdays without inventing observations", () => {
+  const rows = api.seasonalityWeekdayRows([{ weekday: 7, count: 2, mean: 210 }]);
+  assert.deepEqual(rows.map(row => row.weekday), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(rows.slice(0, 6).map(row => [row.count, row.mean]), Array.from({ length: 6 }, () => [0, null]));
+  assert.deepEqual([rows[6].count, rows[6].mean], [2, 210]);
+});
+
+test("correlation, distribution, scatter and dashboard parse actual NEM response fields", () => {
+  assert.deepEqual(api.parseCorrelation(correlation()), correlation());
+  assert.deepEqual(api.parseDistribution(distribution()), distribution());
+  assert.deepEqual(api.parseDistribution({ ...distribution(), sample_count: 0, unit: null, bins: [] }), { ...distribution(), sample_count: 0, unit: null, bins: [] });
+  assert.deepEqual(api.parseScatter(scatter()), scatter());
+  assert.deepEqual(api.parseDashboard(dashboard()), dashboard());
+});
+
+test("parsers accept empty ranges and nullable statistics without inventing values", () => {
+  assert.equal(api.parseSummary({ ...summary(), sample_count: 0, start_date: null, end_date: null, mean: null, median: null, minimum: null, maximum: null }).mean, null);
+  assert.equal(api.parseTrend({ ...trend(), records: [] }).records.length, 0);
+  assert.equal(api.parseDistribution({ ...distribution(), sample_count: 0, bins: [] }).sample_count, 0);
+  assert.equal(api.parseDemandStatistics({ ...demandStatistics(), count: 0, mean: null, minimum: null, maximum: null }).mean, null);
+  assert.equal(api.parseDashboard({ ...dashboard(), total_observations: 0, latest_daily_demand_mw: null, average_daily_demand_mw: null, minimum_daily_demand_mw: null, maximum_daily_demand_mw: null, latest_renewable_proportion_percent: null, latest_price_per_mwh: null, latest_data_timestamp: null }).latest_daily_demand_mw, null);
+});
+
+test("parsers reject wrong units, malformed dates, nonfinite numbers and inconsistent counts", () => {
+  assert.throws(() => api.parseSummary({ ...summary(), unit: "TWh" }));
+  assert.throws(() => api.parseDemandStatistics({ ...demandStatistics(), unit: "TWh" }));
+  assert.throws(() => api.parseSummary({ ...summary(), mean: "150" }));
+  assert.throws(() => api.parseSummary({ ...summary(), sample_count: -1 }));
+  assert.throws(() => api.parseTrend({ ...trend(), records: [{ ...trend().records[0], period: "2025-13" }] }));
+  assert.throws(() => api.parseTrend({ ...trend(), records: [{ ...trend().records[0], value: Infinity }] }));
+  assert.throws(() => api.parseSeasonality({ ...seasonality(), records: [{ weekday: 0, count: 1, mean: 1 }] }));
+  assert.throws(() => api.parseSeasonality({ ...seasonality(), records: [{ weekday: 8, count: 1, mean: 1 }] }));
+  assert.throws(() => api.parseCorrelation({ ...correlation(), matrix: { ...correlation().matrix, demand: { demand: 1 } } }));
+  assert.throws(() => api.parseDistribution({ ...distribution(), sample_count: 3 }));
+  assert.throws(() => api.parseDistribution({ ...distribution(), unit: 123 }));
+  assert.throws(() => api.parseDashboard({ ...dashboard(), dataset_name: "VNM" }));
+  assert.throws(() => api.parseDashboard({ ...dashboard(), timezone: "UTC" }));
+});
+
+test("dashboard demand statistics endpoint receives interval and Brisbane date bounds", async t => {
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    const request = new URL(url);
+    assert.equal(request.pathname, "/api/electricity/demand/statistics");
+    assert.equal(request.searchParams.get("interval"), "1d");
+    assert.equal(request.searchParams.get("start_at"), "2025-01-01T00:00:00+10:00");
+    assert.equal(request.searchParams.get("end_at"), "2025-01-03T00:00:00+10:00");
+    assert.equal(options.credentials, "include");
+    return Response.json(demandStatistics());
   });
-}
-test("filters produce stable query keys and pass both date boundaries", () => {
-  assert.equal(analyticsPath("/api/analysis/trend", { window_months: 3, start_month: "2025-01" }), analyticsPath("/api/analysis/trend", { start_month: "2025-01", window_months: 3 }));
-  assert.deepEqual(rangeParams([{ month: "2025-01" }, { month: "2025-03" }]), { start_month: "2025-01", end_month: "2025-03" });
+  const params = { ...api.rangeParams([{ date: "2025-01-01" }, { date: "2025-01-02" }]), interval: "1d" };
+  assert.deepEqual(await api.fetchAnalytics("/api/electricity/demand/statistics", params, api.parseDemandStatistics, { baseUrl: "http://test.local" }), demandStatistics());
 });
-test("server values are preserved instead of recalculating statistics in the client", () => {
-  const data = trend(); data.records[0].trend = 123.4567;
-  assert.equal(parseTrend(data).records[0].trend, 123.4567);
-  const matrix = correlation(); matrix.matrix.demand.previous_month = 0.314159;
-  assert.equal(parseCorrelation(matrix).matrix.demand.previous_month, 0.314159);
-});
-test("parsers accept empty ranges and null statistics", () => {
-  assert.equal(parseSummary({ ...summary(), count: 0, start_month: null, end_month: null, mean: null, median: null, min: null, max: null }).mean, null);
-  assert.equal(parseTrend({ ...trend(), records: [] }).records.length, 0);
-  assert.equal(parseSeasonality(seasonal()).records.length, 12);
-  assert.equal(parseDistribution({ unit: "TWh", count: 0, bins: [] }).count, 0);
-  assert.equal(parseDashboard({ ...overview(), record_count: 0, start_month: null, latest_month: null, mean_demand_twh: null, minimum_demand_twh: null, maximum_demand_twh: null, latest_demand_twh: null, change_from_previous_month_pct: null, data_updated_at: null }).latest_demand_twh, null);
-});
-test("parsers reject invalid units, numbers, dates, features and histogram counts", () => {
-  assert.throws(() => parseSummary({ ...summary(), unit: "MW" }));
-  assert.throws(() => parseSummary({ ...summary(), mean: "15" }));
-  assert.throws(() => parseSummary({ ...summary(), count: -1 }));
-  assert.throws(() => parseTrend({ ...trend(), records: [{ month: "2025-13", value: 10, trend: null }] }));
-  assert.throws(() => parseTrend({ ...trend(), records: [{ month: "2025-01", value: Infinity, trend: null }] }));
-  assert.throws(() => parseSeasonality({ ...seasonal(), records: [] }));
-  assert.throws(() => parseCorrelation({ ...correlation(), features: ["demand", "previous_month", "month_number"] }));
-  const matrix = correlation(); matrix.matrix.demand.demand = 2; assert.throws(() => parseCorrelation(matrix));
-  assert.throws(() => parseDistribution({ ...distribution(), count: 3 }));
-  assert.throws(() => parseDashboard({ ...overview(), data_updated_at: "invalid" }));
-});
-for (const status of [401, 403, 422, 503]) {
-  test(`HTTP ${status} is surfaced without a local data fallback`, async t => {
-    t.mock.method(globalThis, "fetch", async () => new Response("error", { status }));
-    await assert.rejects(fetchAnalytics("/api/analysis/summary", {}, parseSummary), error => error.status === status);
+
+test("analysis HTTP client sends cookie-authenticated Gateway requests and exact query params", async t => {
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    const request = new URL(url);
+    assert.equal(request.pathname, "/api/analysis/summary");
+    assert.equal(request.searchParams.get("metric"), "demand");
+    assert.equal(request.searchParams.get("interval"), "1d");
+    assert.equal(request.searchParams.get("start_at"), "2025-01-01T00:00:00+10:00");
+    assert.equal(options.credentials, "include"); assert.equal(options.cache, "no-store");
+    return Response.json(summary());
   });
-}
-test("malformed JSON and invalid successful responses are rejected", async t => {
+  assert.deepEqual(await api.fetchAnalytics("/api/analysis/summary", { metric: "demand", interval: "1d", start_at: "2025-01-01T00:00:00+10:00" }, api.parseSummary, { baseUrl: "http://test.local" }), summary());
+});
+
+for (const status of [401, 403, 422, 503]) test(`HTTP ${status} remains visible without a local fallback`, async t => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Gateway error" }, { status }));
+  await assert.rejects(api.fetchAnalytics("/api/analysis/summary", {}, api.parseSummary), error => error.status === status && error.detail === "Gateway error");
+});
+
+test("malformed JSON, invalid success payloads and network failures are surfaced", async t => {
   t.mock.method(globalThis, "fetch", async () => new Response("not JSON"));
-  await assert.rejects(fetchAnalytics("/api/analysis/summary", {}, parseSummary), /JSON/);
+  await assert.rejects(api.fetchAnalytics("/api/analysis/summary", {}, api.parseSummary), /JSON/);
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ...summary(), unit: "TWh" }));
+  await assert.rejects(api.fetchAnalytics("/api/analysis/summary", {}, api.parseSummary), /cấu trúc/);
+  t.mock.method(globalThis, "fetch", async () => { throw new TypeError("offline"); });
+  await assert.rejects(api.fetchAnalytics("/api/analysis/summary", {}, api.parseSummary), /Gateway/);
 });
-test("cancelled filter requests cannot return obsolete results", async t => {
-  t.mock.method(globalThis, "fetch", (_, { signal }) => new Promise((_, reject) => { signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }); }));
-  const controller = new AbortController();
-  const request = fetchAnalytics("/api/analysis/trend", { window_months: 3 }, parseTrend, { signal: controller.signal });
-  controller.abort(); await assert.rejects(request, { name: "AbortError" });
-});
-test("analysis timeout is reported", async t => {
-  t.mock.method(globalThis, "fetch", (_, { signal }) => new Promise((_, reject) => { signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }); }));
-  await assert.rejects(fetchAnalytics("/api/analysis/summary", {}, parseSummary, { timeoutMs: 10 }), /phản hồi quá lâu/);
-});
-test("parsers consume real Analysis Service output for the project CSV and empty ranges", t => {
-  const python = fileURLToPath(new URL("../../../BE/.venv/Scripts/python.exe", import.meta.url));
-  if (!existsSync(python)) { t.skip("Backend Windows virtual environment is not installed"); return; }
-  const script = `
-import json
-from app.services.electricity import load_demand
-from service_apps.analysis.main import summary, trend, seasonality, correlation, distribution
-from service_apps.analysis.schemas import AnalysisRecordsRequest, TrendRequest, DistributionRequest
-from app.schemas.dashboard import DashboardOverview
-rows = load_demand()['records']
-def run(records):
-    request = AnalysisRecordsRequest(records=records)
-    return {'summary':summary(request), 'trend':trend(TrendRequest(records=records,window_months=6)), 'seasonality':seasonality(request), 'correlation':correlation(request), 'distribution':distribution(DistributionRequest(records=records,bins=10))}
-print(json.dumps({'real':run(rows), 'empty':run([])}))
-`;
-  const result = JSON.parse(execFileSync(python, ["-c", script], { cwd: new URL("../../../BE/", import.meta.url), encoding: "utf8" }));
-  for (const [kind, data] of Object.entries(result)) {
-    const summaryData = parseSummary(data.summary);
-    assert.equal(parseTrend(data.trend).records.length, summaryData.count);
-    assert.equal(parseSeasonality(data.seasonality).records.reduce((sum, row) => sum + row.count, 0), summaryData.count);
-    assert.equal(parseDistribution(data.distribution).count, summaryData.count);
-    assert.equal(parseCorrelation(data.correlation).features.length, 3);
-    assert.equal(kind === "empty" ? summaryData.count === 0 : summaryData.count > 0, true);
-  }
+
+test("cancelled and timed out filter requests do not return obsolete results", async t => {
+  t.mock.method(globalThis, "fetch", (_, { signal }) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })));
+  const controller = new AbortController(); const pending = api.fetchAnalytics("/api/analysis/trend", {}, api.parseTrend, { signal: controller.signal }); controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  await assert.rejects(api.fetchAnalytics("/api/analysis/summary", {}, api.parseSummary, { timeoutMs: 10 }), /phản hồi quá lâu/);
 });

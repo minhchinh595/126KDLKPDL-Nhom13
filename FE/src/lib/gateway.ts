@@ -5,7 +5,7 @@ export interface User { id: number; username: string; email: string; role: Role;
 export type ModelKind = "clustering" | "prediction" | "classification";
 export interface ModelRun { id: number; model_type: ModelKind; status: "queued" | "running" | "completed" | "failed"; created_at: string; started_at: string | null; completed_at: string | null; parameters: Record<string, unknown> | null; metrics: Record<string, unknown> | null; error_message: string | null }
 export interface PageResult<T> { items: T[]; page: number; page_size: number; total: number; pages: number }
-export interface Dataset { id: number; name: string; source: string; file_name: string; description: string | null; record_count: number; start_date: string | null; end_date: string | null; status: string; created_at: string; updated_at: string }
+export interface Dataset { id: number; name: string; source: string; file_name: string; description: string | null; record_count: number; start_date: string | null; end_date: string | null; status: string; source_role: "active_nem" | "legacy"; created_at: string; updated_at: string }
 export interface ImportHistory { id: number; dataset_id: number; mode: string; status: string; rows_read: number; inserted_count: number; updated_count: number; skipped_count: number; error_count: number; error_message: string | null; started_at: string; completed_at: string | null }
 export interface ImportResult { dataset: Dataset; history: ImportHistory }
 export const gatewayBase = () => resolveApiBase(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001");
@@ -22,9 +22,10 @@ export async function gatewayRequest<T>(path: string, { method = "GET", body, si
     throw new Error(combined.aborted ? "Yêu cầu quá thời gian chờ. Hãy tải lại kết quả trước khi thao tác lần nữa." : "Không kết nối được Gateway. Kiểm tra dịch vụ tại cổng 8001.");
   }
   if (!response.ok) {
-    let detail = "";
-    try { const payload = await response.json(); if (typeof payload.detail === "string") detail = payload.detail; else if (Array.isArray(payload.detail)) detail = payload.detail.map((entry: { loc?: unknown[]; msg?: string }) => `${entry.loc?.join(".") ?? ""}: ${entry.msg ?? "Không hợp lệ"}`).join("; "); } catch { /* HTTP status remains available. */ }
-    throw new DemandApiError(response.status, response.status === 401 ? "Phiên đăng nhập đã hết hạn." : response.status === 403 ? "Tài khoản không có quyền thực hiện thao tác này." : detail || `Gateway trả lỗi HTTP ${response.status}.`);
+    let detail: unknown;
+    try { detail = (await response.json()).detail; } catch { /* HTTP status remains available. */ }
+    const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((entry: { loc?: unknown[]; msg?: string }) => `${entry.loc?.join(".") ?? ""}: ${entry.msg ?? "Không hợp lệ"}`).join("; ") : detail && typeof detail === "object" && typeof (detail as Record<string, unknown>).message === "string" ? String((detail as Record<string, unknown>).message) : `Gateway trả lỗi HTTP ${response.status}.`;
+    throw new DemandApiError(response.status, response.status === 401 ? "Phiên đăng nhập đã hết hạn." : response.status === 403 ? "Tài khoản không có quyền thực hiện thao tác này." : message, detail);
   }
   if (response.status === 204) return undefined as T;
   try { return await response.json() as T; } catch { throw new Error("Gateway trả về dữ liệu không hợp lệ."); }
@@ -44,6 +45,6 @@ export function modelRunsPath({ modelType = "", status = "", order = "desc", pag
 }
 export function modelActionPath(kind: ModelKind, action: "train" | "run", maxK = 5) {
   if (!["clustering", "prediction", "classification"].includes(kind) || !["train", "run"].includes(action)) throw new Error("Thao tác mô hình không được hỗ trợ.");
-  if (kind === "clustering" && action === "train" && (!Number.isInteger(maxK) || maxK < 2 || maxK > 8)) throw new Error("K tối đa phải là số nguyên từ 2 đến 8.");
+  if (kind === "clustering" && action === "train" && (!Number.isInteger(maxK) || maxK < 2 || maxK > 5)) throw new Error("K tối đa phải là số nguyên từ 2 đến 5.");
   return `/api/${kind}/${action}` + (kind === "clustering" && action === "train" ? query({ max_k: maxK }) : "");
 }

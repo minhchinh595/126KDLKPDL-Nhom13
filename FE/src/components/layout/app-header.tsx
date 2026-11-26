@@ -82,11 +82,11 @@ export function AppHeader() {
         <div className="hidden lg:flex items-center gap-1.5">
           <Badge variant="outline" className="gap-1 px-2 py-0.5 text-[11px] font-normal border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300">
             <Zap className="size-3 text-amber-500" />
-            <span>Việt Nam (VNM)</span>
+            <span>Open Electricity NEM</span>
           </Badge>
           <Badge variant="outline" className="gap-1 px-2 py-0.5 text-[11px] font-normal border-blue-500/30 bg-blue-500/5 text-blue-700 dark:text-blue-300">
             <Database className="size-3 text-blue-500" />
-            <span>Ember Monthly Demand</span>
+            <span>Daily Network Demand · MW</span>
           </Badge>
         </div>
 
