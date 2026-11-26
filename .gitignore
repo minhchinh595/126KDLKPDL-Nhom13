@@ -57,3 +57,10 @@ data/experiments/openelectricity/
 
 # Keep the NEM provenance manifest tracked
 !data/openelectricity_manifest.md
+
+# Open Electricity NEM - local trained model artifacts
+/BE/artifacts/electricity_nem_daily_kmeans.joblib
+/BE/artifacts/electricity_nem_daily_demand_rf.joblib
+/BE/artifacts/electricity_nem_daily_demand_rf_h2.joblib
+/BE/artifacts/electricity_nem_daily_demand_classifier.joblib
+/BE/artifacts/electricity_nem_daily_demand_classifier_h2.joblib
