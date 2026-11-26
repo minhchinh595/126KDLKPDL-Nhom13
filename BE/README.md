@@ -1,6 +1,6 @@
 # Backend API
 
-FastAPI backend for monthly Vietnamese electricity demand. The API uses PostgreSQL through the shared SQLAlchemy session dependency; analytics and model routes read `VNM / demand / fuel IS NULL / TWh` rows from `electricity_consumption`.
+FastAPI backend for Electricity Consumption Analytics. Open Electricity NEM is the active dataset for public electricity, dashboard, analysis and ML workflows: network `NEM`, daily interval `1d`, demand in `MW`, timestamps interpreted in `Australia/Brisbane`. The fixed-horizon Prediction and Classification contract is `nem_daily_demand_h2_v1`. VNM monthly code, data and artifacts remain legacy; they have not been deleted, and active NEM routes do not fall back to them.
 
 ## Local setup
 
@@ -39,7 +39,7 @@ The docs are at `http://127.0.0.1:8000/docs`.
 
 ## Analysis Service (independent process)
 
-The public Analysis routes remain under `/api/analysis/*` in the Gateway. The Gateway reads the selected monthly records from PostgreSQL and calls the private Analysis Service over HTTP. The service reuses the existing functions in `app/analysis/`, validates JSON input, and has no database connection. It exposes `/health` and authenticated internal `POST /internal/analysis/{summary|trend|seasonality|correlation|distribution}` endpoints.
+The public Analysis routes remain under `/api/analysis/*` in the Gateway. The Gateway reads validated daily network-level NEM observations from PostgreSQL and calls the private Analysis Service over HTTP. The service reuses the existing analysis functions, validates JSON input, and has no database connection. It exposes `/health` and authenticated internal analysis endpoints; monthly VNM helpers are retained for legacy compatibility and are not the active Gateway data path.
 
 Set these values in the root `.env` before starting either process. Generate a random secret of at least 32 bytes and use the same value for both processes; do not commit the actual secret:
 
@@ -67,7 +67,7 @@ Check service health with `Invoke-RestMethod http://127.0.0.1:8101/health`. To c
 
 ## Clustering Service (independent process)
 
-The Gateway retains all public `/api/clustering/*` endpoints, authentication, PostgreSQL reads, and `model_runs` persistence. It calls a separate Clustering Service over HTTP. The Clustering Service has no database connection; it reuses `app/clustering/kmeans.py`, validates monthly records, and authenticates Gateway requests with `X-Clustering-Service-Secret`.
+The Gateway retains public `/api/clustering/*` endpoints, authentication, NEM PostgreSQL reads, and `model_runs` persistence. It calls a separate Clustering Service over HTTP. The service has no database connection and uses daily network-level NEM features. The monthly VNM implementation remains legacy and is not the active Gateway workflow.
 
 Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Clustering Service:
 
@@ -91,11 +91,11 @@ Run the Gateway in another terminal from `BE`:
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
 ```
 
-Check service health at `http://127.0.0.1:8102/health`. Its internal endpoints are `POST /internal/clustering/train` and `POST /internal/clustering/run`; they are not public browser APIs. The Gateway's public train/run routes remain documented at `http://127.0.0.1:8000/docs` and require an Admin cookie. Train is the only operation that fits or writes the K-Means artifact. Run loads the artifact and returns conflict when it is absent, incompatible, stale, or built from a different monthly dataset. Both processes must resolve the same `CLUSTERING_MODEL_PATH`; if unset in local development, the existing `BE/artifacts/electricity_demand_kmeans.joblib` default is used. No training runs at service startup.
+Check service health at `http://127.0.0.1:8102/health`. The NEM internal endpoints are `POST /internal/clustering/nem/train` and `POST /internal/clustering/nem/run`; they are not public browser APIs. The Gateway's public train/run routes require an Admin cookie. Train evaluates daily NEM configurations and writes the NEM K-Means artifact; Run loads that artifact and assigns clusters without fitting. Compose configures `NEM_CLUSTERING_MODEL_PATH` with default `/app/artifacts/electricity_nem_daily_kmeans.joblib`. No training runs at service startup.
 
 ## Prediction Service (independent process)
 
-The Gateway keeps the public `/api/prediction/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the separate Prediction Service over HTTP. The service has no database connection and directly reuses `app/prediction/model.py`.
+The Gateway keeps public `/api/prediction/*` endpoints, user authentication and RBAC, NEM PostgreSQL reads, and `model_runs` persistence. It sends validated daily NEM demand in MW to the separate Prediction Service over HTTP. The service has no database connection; the active model is the NEM H2 implementation, separate from the retained monthly VNM model.
 
 Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Prediction Service:
 
@@ -119,11 +119,11 @@ Run the Gateway in another terminal from `BE`:
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
 ```
 
-Check health at `http://127.0.0.1:8103/health`. Internal endpoints are `POST /internal/prediction/train` and `POST /internal/prediction/run`; they are not public browser APIs. Public train/run routes require an Admin cookie. Train explicitly fits and saves the Random Forest artifact; Run only loads the existing artifact and predicts, and the service does not train at startup. Both processes must resolve the same `PREDICTION_MODEL_PATH` (default `BE/artifacts/electricity_demand_rf.joblib`). Keep that artifact on persistent shared storage when using separate containers.
+Check health at `http://127.0.0.1:8103/health`. NEM internal endpoints are `POST /internal/prediction/nem/train` and `POST /internal/prediction/nem/run`; they are not public browser APIs. Public Train/Run routes require an Admin cookie. Train fits and saves `electricity_nem_daily_demand_rf_h2.joblib`; Run loads that H2 artifact and predicts without fitting. Compose passes `NEM_PREDICTION_MODEL_PATH_H2`, defaulting to `/app/artifacts/electricity_nem_daily_demand_rf_h2.joblib`. The H2 artifact is distinct from both the NEM H1 and legacy VNM artifacts. No training runs at service startup.
 
 ## Classification Service (independent process)
 
-The Gateway retains the public `/api/classification/*` endpoints, user authentication and RBAC, PostgreSQL reads, and `model_runs` persistence. It sends normalized monthly demand records to the Classification Service over HTTP. The service has no database connection and directly reuses `app/classification/model.py`.
+The Gateway retains public `/api/classification/*` endpoints, user authentication and RBAC, NEM PostgreSQL reads, and `model_runs` persistence. It sends validated daily NEM demand in MW to the Classification Service over HTTP. The service has no database connection; the active model classifies H2 demand as binary `Low`/`High`, separate from retained monthly VNM classification code.
 
 Configure a separate random secret of at least 32 bytes in the root `.env`, shared only by the Gateway and Classification Service:
 
@@ -147,7 +147,7 @@ Run the Gateway in another terminal from `BE`:
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file ..\.env
 ```
 
-Check health at `http://127.0.0.1:8104/health`. Internal endpoints are `POST /internal/classification/train` and `POST /internal/classification/run`; they are not public browser APIs. Public Train and Run require an Admin cookie; Analysts can read latest and run history. Train explicitly fits and writes the Random Forest artifact. Run only loads the saved classifier and predicts, with no training at service startup or on Run failure. The service uses `CLASSIFICATION_MODEL_PATH` (default `BE/artifacts/electricity_demand_classifier.joblib`); the Gateway does not access the artifact. Mount the existing file at that path and keep it on persistent storage when using a separate container. Public endpoints remain available through the Backend Swagger page at `http://127.0.0.1:8000/docs`.
+Check health at `http://127.0.0.1:8104/health`. NEM internal endpoints are `POST /internal/classification/nem/train` and `POST /internal/classification/nem/run`; they are not public browser APIs. Public Train/Run require an Admin cookie; Analysts can read latest and history. Train fits and writes `electricity_nem_daily_demand_classifier_h2.joblib`, including the training-derived threshold. Run loads that H2 artifact and predicts without fitting. Compose passes `NEM_CLASSIFICATION_MODEL_PATH_H2`, defaulting to `/app/artifacts/electricity_nem_daily_demand_classifier_h2.joblib`. No training runs at service startup.
 
 ## First administrator
 
@@ -168,7 +168,7 @@ There is no default account or password in source code.
 |---|---|
 | Public | `GET /api/health`, `GET /api/health/ready`, `POST /api/auth/login`, `POST /api/auth/logout` |
 | Authenticated Admin or Analyst | `/api/auth/me`; electricity reads/export; analysis; dashboard; model result/history reads; reports |
-| Admin only | user management; dataset management/upload/import/sync; clustering train/run; prediction train/run; classification train/run |
+| Admin only | user management; legacy dataset upload/import/sync requests (return HTTP 410); clustering train/run; prediction train/run; classification train/run |
 
 All other API routes require the JWT cookie. Role is looked up from PostgreSQL for each request, so disabling an account takes effect on its next request. Browser clients on a different origin must send cookies explicitly (`credentials: "include"` for `fetch`, or `withCredentials: true` for Axios). `CORS_ORIGINS` must list the exact Frontend origin; the API enables credentialed CORS. In production, use HTTPS and `APP_ENV=production` so the auth cookie is Secure. Keep the JWT secret private; it must be a random value of at least 32 bytes.
 
@@ -177,57 +177,56 @@ All other API routes require the JWT cookie. Role is looked up from PostgreSQL f
 - Health: `GET /api/health`, `GET /api/health/ready`
 - Authentication: `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
 - Users (Admin): `GET /api/users`, `GET /api/users/{user_id}`, `POST /api/users`, `PATCH /api/users/{user_id}`, `PATCH /api/users/{user_id}/status`
-- Datasets (Admin): `GET /api/datasets`, `GET /api/datasets/{dataset_id}`, `POST /api/datasets/upload`, `POST /api/datasets/{dataset_id}/import`, `GET /api/datasets/{dataset_id}/history`, `POST /api/datasets/sync`, `GET /api/datasets/sync/status`
+- Dataset metadata/history: `GET /api/datasets`, `GET /api/datasets/{dataset_id}`, `GET /api/datasets/{dataset_id}/history`, `GET /api/datasets/sync/status`. Legacy CSV `POST /api/datasets/upload`, `POST /api/datasets/{dataset_id}/import`, and `POST /api/datasets/sync` remain for compatibility but return HTTP 410 and do not import data.
 - Electricity reads: `GET /api/electricity/demand`, `GET /api/electricity/demand/{record_id}`, `GET /api/electricity/demand/statistics`, `GET /api/electricity/demand/export`
 - Dashboard: `GET /api/dashboard/overview`
-- Analysis: `GET /api/analysis/summary`, `/trend`, `/seasonality`, `/correlation`, `/distribution`
+- Analysis: `GET /api/analysis/summary`, `/trend`, `/seasonality`, `/correlation`, `/distribution`, `/scatter`
 - Clustering: Admin `POST /api/clustering/train`, `/api/clustering/run`; reads `GET /api/clustering/latest`, `/runs`, `/runs/{run_id}`
 - Prediction: Admin `POST /api/prediction/train`, `/run`; reads `GET /api/prediction/latest`, `/runs`, `/runs/{run_id}`
 - Classification: Admin `POST /api/classification/train`, `/run`; reads `GET /api/classification/latest`, `/runs`, `/runs/{run_id}`
 - Shared model history: `GET /api/model-runs`, `GET /api/model-runs/{run_id}`
 - Reports: `GET /api/reports/summary`, `/analysis`, `/model-runs`, `/export`
 
-Demand listing defaults to 100 records per page (`page`, `page_size`, maximum 1000) and supports `start_month` and `end_month` in `YYYY-MM` format. Reports/export currently return CSV for demand or model-run rows.
+Demand listing reads Open Electricity NEM observations with `interval` (daily `1d` for the active demand UI), `start_at`, `end_at`, `page`, and `page_size` (maximum 1000). Date filtering uses a half-open range `[start_at, end_at)`; timestamps are displayed in `Australia/Brisbane`. Reports/export currently return CSV for NEM demand observations or NEM ML model-run rows.
 
-## Dataset upload and sync
+## Legacy VNM CSV ingestion (disabled)
 
-Upload uses multipart form data with `file`, `name`, `source`, and optional `description`:
+The former monthly VNM CSV upload/import/sync workflow is not an active data path. The Gateway returns HTTP 410 for `POST /api/datasets/upload`, `POST /api/datasets/{dataset_id}/import`, and `POST /api/datasets/sync`; it does not report a successful import. Existing VNM Dataset metadata and database rows are retained. The standalone CSV Ingestion Service is opt-in through the `legacy-csv` Compose profile and is not required by the active NEM Gateway workflow. Dataset GET endpoints remain available for metadata and import-history review.
 
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/api/datasets/upload `
-  -b cookies.txt -F "name=Vietnam demand" -F "source=Ember" `
-  -F "file=@..\data\processed\vietnam_electricity_demand.csv"
-```
+## NEM ML architecture and demo flow
 
-Upload validates CSV columns, monthly dates, numeric values, allowed VNM demand/TWh records, duplicates and the configured size limit. It stores a UUID-named file under ignored `BE/uploads/`. Import is a separate request to `POST /api/datasets/{dataset_id}/import`; PostgreSQL upserts are idempotent and import counts are recorded in `dataset_imports`.
+The active flow is **Gateway → internal ML service → Gateway/PostgreSQL**. The Gateway authenticates the user, enforces Admin/Analyst permissions, loads observations through `app/services/nem_ml_data.py`, sends normalized JSON to the service, and writes successful results and provenance to the existing `model_runs.parameters` and `model_runs.metrics` JSONB columns. ML services do not connect to PostgreSQL. No schema migration is required for model-build metadata.
 
-Optional sync accepts an HTTPS `DATASET_SYNC_URL` in `.env`. The URL must return a CSV in the same normalized project format; configure the source outside code, then call `POST /api/datasets/sync`. `GET /api/datasets/sync/status` reports the latest attempt. A failed fetch/validation is recorded and does not delete existing consumption rows. No periodic scheduler is enabled; the service can be called by an external scheduler.
+The shared NEM loader resolves the exact Open Electricity dataset name and source, then filters network-level `NEM`, daily (`1d`) observations and verified metric units. It reports data quality and fingerprints; it does not fill missing dates or silently fall back to VNM. Prediction and Classification use daily demand in MW. Clustering uses daily network metrics: Model A has demand, renewable generation and price; Model B adds renewable proportion. `demand_energy` is not a clustering feature.
 
-Dataset CSV parsing and normalization run in the standalone Ingestion Service on port `8105`. Start it from `BE` with `python -m uvicorn service_apps.ingestion.main:app --host 127.0.0.1 --port 8105 --env-file ..\.env`. Configure `INGESTION_SERVICE_URL`, `INGESTION_SERVICE_SECRET` (at least 32 bytes, shared only with the Gateway), and `INGESTION_SERVICE_TIMEOUT_SECONDS` in that environment file. The service has no PostgreSQL connection; the Gateway validates roles and owns dataset metadata, import history, and all database transactions. Dataset GET endpoints are available to Admin and Analyst; upload, import, and sync remain Admin-only.
+| Model | Purpose and input | Train/Run behavior |
+|---|---|---|
+| Clustering | Groups daily NEM observations with similar operating characteristics; cluster labels are not geographic regions. | Train evaluates configurations and writes the NEM K-Means artifact. Run loads that artifact and assigns clusters without fitting. |
+| Prediction | Forecasts next-day NEM demand in MW using lag and calendar features. | Train evaluates chronological folds and writes the NEM Random Forest artifact. Run loads it and predicts; it does not retrain. |
+| Classification | Predicts next-day daily demand as binary `Low`/`High` in MW. Validation thresholds are computed from each fold's training split. | Train evaluates chronological folds and saves its classifier and threshold. Run loads them and classifies without fitting. |
 
-## Model artifacts and demo run order
+NEM artifacts are separate from retained VNM legacy artifacts:
 
-Training and run are separate operations. For Clustering, Prediction and Classification, `POST /api/{model}/train` fits the model and writes its artifact; `POST /api/{model}/run` only loads that artifact, creates a result in `model_runs`, and does not train. Defaults are `BE/artifacts/electricity_demand_kmeans.joblib`, `electricity_demand_rf.joblib`, and `electricity_demand_classifier.joblib`. Configure `CLUSTERING_MODEL_PATH`, `PREDICTION_MODEL_PATH`, and `CLASSIFICATION_MODEL_PATH` to override them. Persist these files across container recreation when using containers.
+| Model | Active artifact | Environment path | Docker Compose default |
+|---|---|---|---|
+| Clustering | `electricity_nem_daily_kmeans.joblib` | `NEM_CLUSTERING_MODEL_PATH` | `/app/artifacts/electricity_nem_daily_kmeans.joblib` |
+| Prediction H2 | `electricity_nem_daily_demand_rf_h2.joblib` | `NEM_PREDICTION_MODEL_PATH_H2` | `/app/artifacts/electricity_nem_daily_demand_rf_h2.joblib` |
+| Classification H2 | `electricity_nem_daily_demand_classifier_h2.joblib` | `NEM_CLASSIFICATION_MODEL_PATH_H2` | `/app/artifacts/electricity_nem_daily_demand_classifier_h2.joblib` |
 
-Log in first and save the HttpOnly cookie in curl's jar (replace the placeholders locally):
+The artifacts are under `BE/artifacts`; Compose mounts that directory into the ML services. Prediction and Classification use H2 contract `nem_daily_demand_h2_v1`: the cutoff is the last complete Brisbane-local date and the target is the next calendar date after the as-of date (two days after cutoff). Train is an explicit Admin action that fits and writes the model artifact; Run loads the saved artifact and performs inference without fitting. The Gateway stores provenance in existing `model_runs` JSONB. Legacy VNM artifacts and separate NEM H1 artifacts are retained but are not substitutes for the H2 artifacts. No API key, password, database URL or service secret is stored in model provenance.
 
-```powershell
-curl.exe -i -c admin-cookies.txt -H "Content-Type: application/json" `
-  -d '{"email":"<admin-email>","password":"<admin-password>"}' `
-  http://127.0.0.1:8000/api/auth/login
-```
+Start the configured services with the root Compose setup described above (`docker compose up -d --build`). For local development, the independent Uvicorn commands in this README's service sections use ports 8102, 8103 and 8104 for Clustering, Prediction and Classification. The public Gateway endpoints retain these routes:
 
-Build artifacts once before demo (requires Admin and source data loaded):
+- Admin: `POST /api/clustering/train`, `/api/clustering/run`; likewise `/api/prediction/train`, `/api/prediction/run` and `/api/classification/train`, `/api/classification/run`.
+- Analyst or Admin: `GET /api/{model}/latest`, `/api/{model}/runs`, and `/api/{model}/runs/{run_id}` for each model.
 
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/api/clustering/train -b admin-cookies.txt
-curl.exe -X POST http://127.0.0.1:8000/api/prediction/train -b admin-cookies.txt
-curl.exe -X POST http://127.0.0.1:8000/api/classification/train -b admin-cookies.txt
-```
+Train is an explicit Admin action. Run is also Admin-only and uses the saved artifact. Analysts can read latest/history but cannot Train or Run. The OpenAPI document at `/docs` is the source of truth for request/response details. After login, use the Admin cookie for Train/Run and the Analyst cookie for reads. Compose paths are container paths; local paths must resolve to the same artifact used by the corresponding service.
 
-Reuse the cookie jar with `-b admin-cookies.txt`. Keep the file and credentials out of source control. At demo, call only the three `/run` endpoints. Prediction and Classification require the artifact's `trained_through_month` to equal the latest database month and a complete latest 12-month window. Clustering additionally verifies the exact monthly source-data fingerprint and latest usable feature month. If input data changed, explicitly retrain during preparation; run returns a clear conflict and records a failed attempt rather than fitting implicitly.
+### Data and evaluation limits
 
-To rebuild results after removing only result rows from `model_runs` in a dedicated demo/test database: authenticate as Admin, call `POST /api/clustering/run`, `/api/prediction/run`, and `/api/classification/run`; then authenticate as Analyst and call each `GET /api/{model}/latest` and `/runs`. Keep `electricity_consumption` intact. Analysis endpoints calculate responses from source data at read time and do not have separate persisted pattern rows.
+The project data snapshot used during migration was reported to contain about 365 daily observations and about 30 days of five-minute observations; live coverage can change with ingestion and should be checked before a demo. The current ML loader and all three NEM models use daily data, not five-minute rows. Prediction and Classification use chronological validation, but available history is limited and test folds do not guarantee future accuracy. Clustering is unsupervised and its scores describe the evaluated sample/configurations, not future performance. No model accuracy or production readiness is guaranteed by these code paths alone.
+
+Legacy monthly VNM implementations and artifact files (`electricity_demand_kmeans.joblib`, `electricity_demand_rf.joblib`, `electricity_demand_classifier.joblib`) are retained in the repository for compatibility/reference. They are not the active data source for migrated public electricity or NEM ML routes. The active Gateway does not use a VNM fallback.
 
 ## Tests
 
