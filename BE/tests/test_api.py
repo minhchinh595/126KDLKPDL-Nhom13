@@ -1,7 +1,9 @@
 import csv
+import hashlib
 import io
+import json
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import jwt
@@ -10,6 +12,7 @@ from app.db.models import Dataset, ElectricityConsumption, ModelRun, NEMObservat
 from conftest import authenticate
 from scripts.import_electricity_data import load_rows
 from app.services.nem_import import NEM_DATASET_NAME, NEM_DATASET_SOURCE
+from app.services import nem_ml_data
 
 
 def make_csv(value: str = "17.87", month: str = "2026-09") -> bytes:
@@ -26,6 +29,37 @@ def login_admin(client, admin):
 
 def login_analyst(client, analyst):
     authenticate(client, analyst.email, "analyst-password-test-123")
+
+
+def make_nem_clustering_payload(count: int = 120) -> dict:
+    import math
+
+    from service_apps.clustering.schemas import NEM_FEATURES
+
+    units = {"demand": "MW", "generation_renewable": "MW", "price": "$/MWh", "renewable_proportion": "%"}
+    configurations = {}
+    start = date(2026, 1, 1)
+    for config_name, feature_names in NEM_FEATURES.items():
+        records = []
+        for index in range(count):
+            phase = index // 30
+            values = {
+                "demand": 19000 + phase * 1800 + 700 * math.sin(index / 5),
+                "generation_renewable": 7200 + (phase % 2) * 1400 + 550 * math.cos(index / 7),
+                "price": 45 + phase * 9 + 16 * math.sin(index / 9),
+                "renewable_proportion": 38 + phase * 3 + 5 * math.cos(index / 8),
+            }
+            records.append({"date": (start + timedelta(days=index)).isoformat(), "features": {name: float(values[name]) for name in feature_names}})
+        feature_units = {name: units[name] for name in feature_names}
+        canonical = {"dataset_id": 4, "dataset_name": NEM_DATASET_NAME, "dataset_source": NEM_DATASET_SOURCE, "network_code": "NEM", "interval": "1d", "feature_names": list(feature_names), "feature_units": feature_units, "records": records}
+        configurations[config_name] = {
+            "feature_names": list(feature_names), "feature_units": feature_units, "records": records,
+            "observation_count": count, "start_date": records[0]["date"], "end_date": records[-1]["date"],
+            "dropped_date_count": 0, "dropped_reasons": {},
+            "data_fingerprint": hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
+            "metric_quality": {name: {"unit": units[name], "iqr_outlier_count": 0} for name in feature_names},
+        }
+    return {"dataset_id": 4, "dataset_name": NEM_DATASET_NAME, "dataset_source": NEM_DATASET_SOURCE, "network_code": "NEM", "interval": "1d", "configurations": configurations}
 
 
 def test_health_and_readiness_use_database(client):
@@ -126,30 +160,40 @@ def test_analyst_can_read_but_cannot_manage_or_run(client, analyst, db_session):
     assert client.post("/api/clustering/train").status_code == 403
 
 
-def test_upload_validation_import_history_and_idempotency(client, admin, monkeypatch):
+def test_legacy_csv_upload_and_import_are_disabled(client, admin, db_session, monkeypatch):
     from app.api.routes import datasets as dataset_routes
 
+    legacy_dataset = Dataset(
+        name="Vietnam demand legacy",
+        source="Ember",
+        file_name="legacy.csv",
+        record_count=93,
+        status="imported",
+    )
+    db_session.add(legacy_dataset)
+    db_session.commit()
     login_admin(client, admin)
     calls = []
-    normalize = dataset_routes.ingestion_service_client.normalize
     monkeypatch.setattr(
         dataset_routes.ingestion_service_client,
         "normalize",
-        lambda content: (calls.append(len(content)) or normalize(content)),
+        lambda content: calls.append(len(content)),
     )
-    invalid = client.post("/api/datasets/upload", data={"name": "bad", "source": "test"}, files={"file": ("bad.csv", b"not,a,valid,schema\n1,2,3,4")})
-    assert invalid.status_code == 422
-    uploaded = client.post("/api/datasets/upload", data={"name": "test-demand", "source": "fixture"}, files={"file": ("demand.csv", make_csv())})
-    assert uploaded.status_code == 201, uploaded.text
-    dataset_id = uploaded.json()["id"]
-    imported = client.post(f"/api/datasets/{dataset_id}/import")
-    assert imported.status_code == 200, imported.text
-    assert imported.json()["history"]["inserted_count"] == 1
-    repeated = client.post(f"/api/datasets/{dataset_id}/import")
-    assert repeated.json()["history"]["skipped_count"] == 1
-    assert client.get(f"/api/datasets/{dataset_id}/history").json().__len__() == 2
-    assert client.get("/api/datasets").json()["total"] == 1
-    assert len(calls) == 4  # Invalid upload, valid upload, and two imports all delegate.
+    metadata = client.get(f"/api/datasets/{legacy_dataset.id}").json()
+    assert metadata["source_role"] == "legacy"
+    uploaded = client.post(
+        "/api/datasets/upload",
+        data={"name": "new-vnm", "source": "Ember"},
+        files={"file": ("demand.csv", make_csv())},
+    )
+    imported = client.post(f"/api/datasets/{legacy_dataset.id}/import")
+    assert uploaded.status_code == 410
+    assert imported.status_code == 410
+    assert "Open Electricity NEM" in uploaded.json()["detail"]
+    assert "Open Electricity NEM" in imported.json()["detail"]
+    assert client.get(f"/api/datasets/{legacy_dataset.id}").json()["source_role"] == "legacy"
+    assert calls == []
+    assert client.get(f"/api/datasets/{legacy_dataset.id}/history").json() == []
 
 
 def test_electricity_pagination_detail_statistics_and_export(client, analyst, db_session):
@@ -194,7 +238,15 @@ def test_dashboard_analysis_model_runs_and_reports(client, analyst, db_session, 
         NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="generation_renewable", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=8, unit="MW", result="NEM", grouping_type="network", grouping_code=""),
         NEMObservation(dataset_id=dataset.id, network_code="NEM", metric="renewable_proportion", interval="1d", observed_at=datetime(2026, 9, 1, tzinfo=timezone.utc), value=47, unit="%", result="NEM", grouping_type="network", grouping_code=""),
     ])
-    run = ModelRun(model_type="clustering", status="completed", started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc), parameters={"k": 2}, metrics={"silhouette_score": 0.7})
+    run = ModelRun(
+        model_type="clustering", status="completed",
+        started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc),
+        parameters={"k": 2, "provenance": {
+            "dataset_name": NEM_DATASET_NAME, "dataset_source": NEM_DATASET_SOURCE,
+            "network_code": "NEM", "interval": "1d",
+        }},
+        metrics={"silhouette_score": 0.7},
+    )
     db_session.add(run)
     db_session.commit()
     login_analyst(client, analyst)
@@ -211,7 +263,14 @@ def test_dashboard_analysis_model_runs_and_reports(client, analyst, db_session, 
     assert client.get("/api/analysis/trend?view=year").status_code == 422
     assert client.get("/api/analysis/distribution?bins=51").status_code == 422
     assert client.get("/api/model-runs?model_type=clustering").json()["total"] == 1
-    assert client.get(f"/api/model-runs/{run.id}").json()["parameters"] == {"k": 2}
+    run_parameters = client.get(f"/api/model-runs/{run.id}").json()["parameters"]
+    assert run_parameters["k"] == 2
+    assert run_parameters["provenance"] == {
+        "dataset_name": NEM_DATASET_NAME,
+        "dataset_source": NEM_DATASET_SOURCE,
+        "network_code": "NEM",
+        "interval": "1d",
+    }
     assert client.get("/api/clustering/runs").json()["total"] == 1
     assert client.get("/api/reports/analysis").status_code == 200
     assert client.get("/api/reports/model-runs").status_code == 200
@@ -231,52 +290,37 @@ def test_empty_dashboard_and_model_result_lookup(client, analyst, db_session):
 
 def test_sync_status_is_configurable_and_safe(client, admin, monkeypatch):
     login_admin(client, admin)
-    monkeypatch.delenv("DATASET_SYNC_URL", raising=False)
+    monkeypatch.setenv("DATASET_SYNC_URL", "https://example.invalid/vnm.csv")
     assert client.get("/api/datasets/sync/status").json()["configured"] is False
-    assert client.post("/api/datasets/sync").status_code == 503
+    assert client.post("/api/datasets/sync").status_code == 410
 
 
-def test_dataset_sync_normalizes_through_ingestion_client_and_imports(client, admin, monkeypatch):
+def test_dataset_sync_is_disabled_without_fetch_or_ingestion(client, admin, monkeypatch):
     from app.api.routes import datasets as dataset_routes
 
-    class RemoteCSV:
-        headers = {"Content-Type": "text/csv; charset=utf-8"}
-
-        def __init__(self):
-            self.sent = False
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _size):
-            if self.sent:
-                return b""
-            self.sent = True
-            return make_csv()
-
     calls = []
-    normalize = dataset_routes.ingestion_service_client.normalize
-    monkeypatch.setattr(dataset_routes, "urlopen", lambda *_args, **_kwargs: RemoteCSV())
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("disabled sync must not fetch or normalize CSV")
+
+    monkeypatch.setattr(dataset_routes, "urlopen", unexpected, raising=False)
     monkeypatch.setenv("DATASET_SYNC_URL", "https://data.example.test/monthly.csv")
     monkeypatch.setattr(
         dataset_routes.ingestion_service_client,
         "normalize",
-        lambda content: (calls.append(len(content)) or normalize(content)),
+        lambda content: calls.append(len(content)),
     )
     login_admin(client, admin)
 
     response = client.post("/api/datasets/sync")
-    assert response.status_code == 200, response.text
-    assert response.json()["history"]["rows_read"] == 1
-    assert calls and calls[0] > 0
-    assert client.get("/api/electricity/demand").status_code == 503
+    assert response.status_code == 410
+    assert "Open Electricity NEM" in response.json()["detail"]
+    assert calls == []
 
 
 def test_clustering_prediction_and_classification_real_monthly_dataset(client, admin, db_session, monkeypatch):
     from app.clustering import kmeans as clustering_model
+    from app.clustering import nem_kmeans
     from app.api.routes import clustering as clustering_routes
     from app.api.routes import prediction as prediction_routes
     from app.api.routes import classification as classification_routes
@@ -298,7 +342,9 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         ClusteringServiceUnavailable,
     )
     from app.prediction import model as prediction_model
+    from app.prediction import nem_model as nem_prediction_model
     from app.classification import model as classification_model
+    from app.classification import nem_classifier as nem_classification_model
     from fastapi.testclient import TestClient as ServiceTestClient
     from service_apps.clustering.main import app as clustering_service_app
     from service_apps.prediction.main import app as prediction_service_app
@@ -311,11 +357,49 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
     db_session.add(dataset)
     db_session.flush()
     db_session.add_all([ElectricityConsumption(dataset_id=dataset.id, **row) for row in rows])
+    nem_dataset = Dataset(
+        name=NEM_DATASET_NAME,
+        source=NEM_DATASET_SOURCE,
+        file_name="Open Electricity API observations",
+        description="NEM daily demand integration fixture",
+        record_count=365,
+        status="ready",
+    )
+    db_session.add(nem_dataset)
+    db_session.flush()
+    nem_end = date(2026, 11, 25)
+    nem_start = nem_end - timedelta(days=364)
+    nem_offset = timezone(timedelta(hours=10))
+    db_session.add_all([
+        NEMObservation(
+            dataset_id=nem_dataset.id,
+            network_code="NEM",
+            metric="demand",
+            interval="1d",
+            observed_at=datetime.combine(nem_start + timedelta(days=index), datetime.min.time(), tzinfo=nem_offset),
+            value=15000 + index * 5 + (index % 7) * 120,
+            unit="MW",
+            result="Demand",
+            grouping_type="network",
+            grouping_code="",
+        )
+        for index in range(365)
+    ])
     db_session.commit()
     with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as artifacts_dir:
         monkeypatch.setattr(clustering_model, "artifact_path", lambda: Path(artifacts_dir) / "clustering_test.joblib")
+        monkeypatch.setattr(nem_kmeans, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_kmeans.joblib")
         monkeypatch.setattr(prediction_model, "_artifact_path", lambda: Path(artifacts_dir) / "prediction_test.joblib")
+        monkeypatch.setattr(nem_prediction_model, "nem_h2_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_rf_h2.joblib")
+        monkeypatch.setattr(nem_prediction_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_rf_h2.joblib")
         monkeypatch.setattr(classification_model, "_artifact_path", lambda: Path(artifacts_dir) / "classification_test.joblib")
+        monkeypatch.setattr(nem_classification_model, "nem_h2_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_classifier_h2.joblib")
+        monkeypatch.setattr(nem_classification_model, "nem_artifact_path", lambda: Path(artifacts_dir) / "electricity_nem_daily_demand_classifier_h2.joblib")
+        monkeypatch.setattr(
+            nem_ml_data,
+            "nem_forecast_dates",
+            lambda _now=None: (date(2026, 11, 26), date(2026, 11, 25), date(2026, 11, 27)),
+        )
         secret = "clustering-integration-test-secret-at-least-32-bytes"
         monkeypatch.setenv("CLUSTERING_SERVICE_SECRET", secret)
         service_client = ServiceTestClient(clustering_service_app)
@@ -328,7 +412,7 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
 
         def call_clustering_service(operation, payload):
             response = service_client.post(
-                f"/internal/clustering/{operation}",
+                f"/internal/clustering/nem/{operation}",
                 json=payload,
                 headers={"X-Clustering-Service-Secret": secret},
             )
@@ -341,18 +425,20 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
             assert response.status_code == 200, response.text
             return response.json()
 
+        nem_payload = make_nem_clustering_payload()
+        monkeypatch.setattr(clustering_routes, "_load_nem_clustering_payload", lambda _db: nem_payload)
         monkeypatch.setattr(
             clustering_routes.clustering_service_client,
-            "train",
-            lambda records, max_k=5: call_clustering_service(
-                "train", {"records": records, "max_k": max_k}
+            "train_nem",
+            lambda payload, max_k=5: call_clustering_service(
+                "train", {**payload, "max_k": max_k}
             ),
         )
 
-        def call_prediction_service(operation, records):
+        def call_prediction_service(operation, payload):
             response = prediction_internal_client.post(
-                f"/internal/prediction/{operation}",
-                json={"records": records},
+                f"/internal/prediction/nem/{operation}",
+                json=payload,
                 headers={"X-Prediction-Service-Secret": prediction_secret},
             )
             if response.status_code == 409:
@@ -366,19 +452,19 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
 
         monkeypatch.setattr(
             prediction_routes.prediction_service_client,
-            "train",
-            lambda records: call_prediction_service("train", records),
+            "train_nem",
+            lambda payload: call_prediction_service("train", payload),
         )
         monkeypatch.setattr(
             prediction_routes.prediction_service_client,
-            "run",
-            lambda records: call_prediction_service("run", records),
+            "run_nem",
+            lambda payload: call_prediction_service("run", payload),
         )
 
-        def call_classification_service(operation, records):
+        def call_classification_service(operation, payload):
             response = classification_internal_client.post(
-                f"/internal/classification/{operation}",
-                json={"records": records},
+                f"/internal/classification/nem/{operation}",
+                json=payload,
                 headers={"X-Classification-Service-Secret": classification_secret},
             )
             if response.status_code == 409:
@@ -396,18 +482,18 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
 
         monkeypatch.setattr(
             classification_routes.classification_service_client,
-            "train",
-            lambda records: call_classification_service("train", records),
+            "train_nem",
+            lambda payload: call_classification_service("train", payload),
         )
         monkeypatch.setattr(
             classification_routes.classification_service_client,
-            "run",
-            lambda records: call_classification_service("run", records),
+            "run_nem",
+            lambda payload: call_classification_service("run", payload),
         )
         monkeypatch.setattr(
             clustering_routes.clustering_service_client,
-            "run",
-            lambda records: call_clustering_service("run", {"records": records}),
+            "run_nem",
+            lambda payload: call_clustering_service("run", payload),
         )
         login_admin(client, admin)
 
@@ -417,58 +503,153 @@ def test_clustering_prediction_and_classification_real_monthly_dataset(client, a
         assert clustering_train.json()["metrics"]["stage"] == "training"
         clustering = client.post("/api/clustering/run")
         assert clustering.status_code == 200, clustering.text
-        assert clustering.json()["metrics"]["sample_count"] > 0
+        assert clustering.json()["metrics"]["run_observation_count"] > 0
         assert clustering.json()["metrics"]["stage"] == "run"
         assert client.get("/api/clustering/latest").json()["metrics"]["stage"] == "run"
         assert client.get("/api/clustering/runs").json()["total"] == 3
 
         prediction_train = client.post("/api/prediction/train")
         assert prediction_train.status_code == 200, prediction_train.text
-        assert prediction_train.json()["metrics"]["holdout_sample_count"] > 0
+        assert prediction_train.json()["metrics"]["training_sample_count"] > 0
         forecast = client.post("/api/prediction/run")
         assert forecast.status_code == 200, forecast.text
-        assert forecast.json()["metrics"]["forecast_month"] == "2026-10"
-        assert client.get("/api/prediction/latest").json()["metrics"]["forecast_month"] == "2026-10"
+        assert forecast.json()["metrics"]["forecast_date"] == "2026-11-27"
+        assert forecast.json()["metrics"]["cutoff_date"] == "2026-11-25"
+        assert forecast.json()["metrics"]["unit"] == "MW"
+        assert client.get("/api/prediction/latest").json()["metrics"]["forecast_date"] == "2026-11-27"
         assert client.get("/api/prediction/runs").json()["total"] == 2
 
         assert client.post("/api/classification/run").status_code == 409
         classification_train = client.post("/api/classification/train")
         assert classification_train.status_code == 200, classification_train.text
-        assert classification_train.json()["metrics"]["holdout_metrics"]["confusion_matrix"]["labels"] == ["low", "medium", "high"]
+        classification_training_metrics = classification_train.json()["metrics"]
+        assert classification_training_metrics["labels"] == ["Low", "High"]
+        assert classification_training_metrics["target"] == "daily_demand_level"
+        assert classification_training_metrics["unit"] == "MW"
+        validation = classification_training_metrics["validation"]
+        assert validation["strategy"] == "TimeSeriesSplit chronological rolling-origin"
+        assert validation["shuffle"] is False
+        assert validation["fold_count"] == 4
+        assert len(validation["folds"]) == validation["fold_count"]
+        for fold in validation["folds"]:
+            assert fold["training_period"]["end"] < fold["validation_period"]["start"]
+            for metric_set in (fold["random_forest"], fold["majority_class_baseline"]):
+                assert metric_set["confusion_matrix"]["labels"] == ["Low", "High"]
+                matrix = metric_set["confusion_matrix"]["matrix"]
+                assert len(matrix) == 2 and all(len(row) == 2 for row in matrix)
+                assert all(isinstance(value, int) and value >= 0 for row in matrix for value in row)
+                assert {"accuracy", "precision_high", "recall_high", "macro_f1"} <= metric_set.keys()
+        assert "pooled_validation_metrics" in validation
         classification = client.post("/api/classification/run")
         assert classification.status_code == 200, classification.text
-        assert classification.json()["metrics"]["forecast_month"] == "2026-10"
-        assert client.get("/api/classification/latest").json()["metrics"]["forecast_month"] == "2026-10"
-        assert client.get("/api/classification/runs").json()["total"] == 3
+        assert classification.json()["metrics"]["forecast_date"] == "2026-11-27"
+        assert classification.json()["metrics"]["cutoff_date"] == "2026-11-25"
+        assert classification.json()["metrics"]["unit"] == "MW"
+        assert classification.json()["metrics"]["predicted_level"] in {"Low", "High"}
+        assert client.get("/api/classification/latest").json()["metrics"]["forecast_date"] == "2026-11-27"
+        assert client.get("/api/classification/runs").json()["total"] == 2
 
 
-def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, monkeypatch):
+def test_failed_model_attempts_are_recorded_without_fake_results(client, admin, db_session, monkeypatch):
     from app.api.routes import clustering as clustering_routes
     from app.clients.clustering import ClusteringServiceRejected
     from app.api.routes import prediction as prediction_routes
     from app.api.routes import classification as classification_routes
     from app.clients.prediction import PredictionServiceRejected
     from app.clients.classification import ClassificationServiceRejected
+    from decimal import Decimal
+    from app.services.nem_ml_data import (
+        DailyObservation,
+        NEMDailyMLData,
+        _fingerprint,
+        build_nem_prediction_payload,
+    )
+
+    daily_end = date(2026, 11, 25)
+    daily_start = daily_end - timedelta(days=39)
+    brisbane = timezone(timedelta(hours=10))
+    observations = tuple(
+        DailyObservation(
+            datetime.combine(daily_start + timedelta(days=index), datetime.min.time(), tzinfo=brisbane),
+            Decimal(str(15000 + index * 10)),
+            "MW",
+            "Demand",
+        )
+        for index in range(40)
+    )
+    daily_fingerprint = _fingerprint(
+        dataset_id=83,
+        dataset_name=NEM_DATASET_NAME,
+        dataset_source=NEM_DATASET_SOURCE,
+        network_code="NEM",
+        metric="demand",
+        interval="1d",
+        unit="MW",
+        rows=observations,
+    )
+    daily_data = NEMDailyMLData(
+        dataset_id=83,
+        dataset_name=NEM_DATASET_NAME,
+        dataset_source=NEM_DATASET_SOURCE,
+        network_code="NEM",
+        metric="demand",
+        interval="1d",
+        unit="MW",
+        observations=observations,
+        start_date=daily_start,
+        end_date=daily_end,
+        missing_dates=(),
+        duplicate_timestamps=(),
+        duplicate_local_dates=(),
+        unit_mismatch_count=0,
+        null_timestamp_count=0,
+        timezone_naive_count=0,
+        null_value_count=0,
+        invalid_value_count=0,
+        non_finite_value_count=0,
+        zero_count=0,
+        negative_count=0,
+        data_fingerprint=daily_fingerprint,
+    )
+    nem_daily_payload = build_nem_prediction_payload(daily_data)
+    clustering_payload = make_nem_clustering_payload()
+    assert clustering_routes._nem_provenance(clustering_payload)["network_code"] == "NEM"
+    assert prediction_routes._nem_provenance(nem_daily_payload)["network_code"] == "NEM"
+    assert classification_routes._nem_provenance(nem_daily_payload)["network_code"] == "NEM"
+
+    rejection_calls = []
 
     def reject_empty_records(*_args, **_kwargs):
+        rejection_calls.append("clustering")
         raise ClusteringServiceRejected("At least four months of monthly history are required")
 
     def reject_prediction_records(*_args, **_kwargs):
+        rejection_calls.append("prediction")
         raise PredictionServiceRejected("At least four months of monthly history are required")
 
     def reject_classification_records(*_args, **_kwargs):
+        rejection_calls.append("classification")
         raise ClassificationServiceRejected("At least four months of monthly history are required")
 
-    monkeypatch.setattr(clustering_routes.clustering_service_client, "train", reject_empty_records)
-    monkeypatch.setattr(clustering_routes.clustering_service_client, "run", reject_empty_records)
-    monkeypatch.setattr(prediction_routes.prediction_service_client, "train", reject_prediction_records)
-    monkeypatch.setattr(prediction_routes.prediction_service_client, "run", reject_prediction_records)
-    monkeypatch.setattr(classification_routes.classification_service_client, "train", reject_classification_records)
-    monkeypatch.setattr(classification_routes.classification_service_client, "run", reject_classification_records)
+    monkeypatch.setattr(
+        clustering_routes,
+        "_load_nem_clustering_payload",
+        lambda _db: clustering_payload,
+    )
+    monkeypatch.setattr(clustering_routes.clustering_service_client, "train_nem", reject_empty_records)
+    monkeypatch.setattr(clustering_routes.clustering_service_client, "run_nem", reject_empty_records)
+    monkeypatch.setattr(prediction_routes, "_load_nem_prediction_payload", lambda _db: nem_daily_payload)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "train_nem", reject_prediction_records)
+    monkeypatch.setattr(prediction_routes.prediction_service_client, "run_nem", reject_prediction_records)
+    monkeypatch.setattr(classification_routes, "_load_nem_classification_payload", lambda _db: nem_daily_payload)
+    monkeypatch.setattr(classification_routes.classification_service_client, "train_nem", reject_classification_records)
+    monkeypatch.setattr(classification_routes.classification_service_client, "run_nem", reject_classification_records)
     login_admin(client, admin)
     assert client.post("/api/clustering/run").status_code == 422
     assert client.post("/api/prediction/train").status_code == 422
     assert client.post("/api/classification/train").status_code == 422
-    runs = client.get("/api/model-runs?status=failed").json()
-    assert runs["total"] == 3
-    assert {item["model_type"] for item in runs["items"]} == {"clustering", "prediction", "classification"}
+    assert rejection_calls == ["clustering", "prediction", "classification"]
+    failed_runs = db_session.query(ModelRun).filter(ModelRun.status == "failed").all()
+    assert len(failed_runs) == 3
+    assert {run.model_type for run in failed_runs} == {"clustering", "prediction", "classification"}
+    assert all(run.metrics is None for run in failed_runs)

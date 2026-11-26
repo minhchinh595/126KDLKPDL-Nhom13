@@ -15,6 +15,7 @@ from app.db.database import get_db
 from app.db.models import ModelRun
 from app.schemas.reports import ReportAnalysis, ReportModelRuns, ReportSummary
 from app.services.nem_data import NEMDatasetUnavailable, query_observations
+from app.services.nem_model_runs import nem_ml_model_run_filter
 
 router = APIRouter(prefix="/reports", dependencies=[Depends(require_analyst)])
 
@@ -39,10 +40,13 @@ def report_analysis(start_at: datetime | None = None, end_at: datetime | None = 
 
 @router.get("/model-runs", response_model=ReportModelRuns)
 def report_model_runs(model_type: Literal["clustering", "prediction", "classification"] | None = None, db: Session = Depends(get_db)):
-    statement = select(ModelRun).order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
-    if model_type:
-        statement = statement.where(ModelRun.model_type == model_type)
-    runs = db.scalars(statement.limit(500)).all()
+    statement = (
+        select(ModelRun)
+        .where(nem_ml_model_run_filter(model_type))
+        .order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
+        .limit(500)
+    )
+    runs = db.scalars(statement).all()
     return {"items": runs, "limit": 500}
 
 
@@ -59,7 +63,13 @@ def export_report(report_type: Literal["demand", "model-runs"] = "demand", metri
             filename = "nem_observations_report.csv"
         else:
             writer.writerow(["id", "model_type", "status", "created_at", "started_at", "completed_at", "parameters", "metrics", "error_message"])
-            for row in db.scalars(select(ModelRun).order_by(ModelRun.created_at.desc()).limit(500)):
+            statement = (
+                select(ModelRun)
+                .where(nem_ml_model_run_filter())
+                .order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
+                .limit(500)
+            )
+            for row in db.scalars(statement):
                 writer.writerow([row.id, row.model_type, row.status, row.created_at, row.started_at, row.completed_at, row.parameters, row.metrics, row.error_message])
             filename = "model_runs_report.csv"
     except NEMDatasetUnavailable as exc:
