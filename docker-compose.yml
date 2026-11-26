@@ -19,6 +19,26 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: electricity-analytics-postgres-test
+    profiles: ["test-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: electricity_analytics_test
+      POSTGRES_USER: electricity_test
+      # Set POSTGRES_TEST_PASSWORD before explicitly starting the test-db profile.
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:-}
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - electricity_analytics_test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   gateway:
     image: *backend-image
     build:
@@ -70,8 +90,6 @@ services:
         condition: service_healthy
       classification:
         condition: service_healthy
-      ingestion:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)); assert data.get('status') == 'success' and data.get('database') == 'connected'"]
       interval: 10s
@@ -101,6 +119,7 @@ services:
     environment:
       CLUSTERING_SERVICE_SECRET: ${CLUSTERING_SERVICE_SECRET:?Set CLUSTERING_SERVICE_SECRET in the project .env file}
       CLUSTERING_MODEL_PATH: /app/artifacts/electricity_demand_kmeans.joblib
+      NEM_CLUSTERING_MODEL_PATH: ${NEM_CLUSTERING_MODEL_PATH:-/app/artifacts/electricity_nem_daily_kmeans.joblib}
     expose:
       - "8102"
     volumes:
@@ -119,6 +138,8 @@ services:
     environment:
       PREDICTION_SERVICE_SECRET: ${PREDICTION_SERVICE_SECRET:?Set PREDICTION_SERVICE_SECRET in the project .env file}
       PREDICTION_MODEL_PATH: /app/artifacts/electricity_demand_rf.joblib
+      NEM_PREDICTION_MODEL_PATH: ${NEM_PREDICTION_MODEL_PATH:-/app/artifacts/electricity_nem_daily_demand_rf.joblib}
+      NEM_PREDICTION_MODEL_PATH_H2: ${NEM_PREDICTION_MODEL_PATH_H2:-/app/artifacts/electricity_nem_daily_demand_rf_h2.joblib}
     expose:
       - "8103"
     volumes:
@@ -137,6 +158,8 @@ services:
     environment:
       CLASSIFICATION_SERVICE_SECRET: ${CLASSIFICATION_SERVICE_SECRET:?Set CLASSIFICATION_SERVICE_SECRET in the project .env file}
       CLASSIFICATION_MODEL_PATH: /app/artifacts/electricity_demand_classifier.joblib
+      NEM_CLASSIFICATION_MODEL_PATH: ${NEM_CLASSIFICATION_MODEL_PATH:-/app/artifacts/electricity_nem_daily_demand_classifier.joblib}
+      NEM_CLASSIFICATION_MODEL_PATH_H2: ${NEM_CLASSIFICATION_MODEL_PATH_H2:-/app/artifacts/electricity_nem_daily_demand_classifier_h2.joblib}
     expose:
       - "8104"
     volumes:
@@ -149,6 +172,7 @@ services:
       start_period: 15s
 
   ingestion:
+    profiles: ["legacy-csv"]
     image: *backend-image
     restart: unless-stopped
     command: ["uvicorn", "service_apps.ingestion.main:app", "--host", "0.0.0.0", "--port", "8105"]
@@ -163,6 +187,26 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  nem-ingestion-worker:
+    image: *backend-image
+    profiles: ["nem-ingestion"]
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.nem.worker"]
+    environment:
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in the project .env file}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the project .env file}@postgres:5432/${POSTGRES_DB:-electricity_analytics_db}"
+      OPEN_ELECTRICITY_API_KEY: ${OPEN_ELECTRICITY_API_KEY:-}
+      OPEN_ELECTRICITY_BASE_URL: ${OPEN_ELECTRICITY_BASE_URL:-https://api.openelectricity.org.au/v4}
+      OPEN_ELECTRICITY_TIMEOUT_SECONDS: ${OPEN_ELECTRICITY_TIMEOUT_SECONDS:-30}
+      NEM_5M_POLL_SECONDS: ${NEM_5M_POLL_SECONDS:-300}
+      NEM_DAILY_POLL_SECONDS: ${NEM_DAILY_POLL_SECONDS:-86400}
+      NEM_5M_LOOKBACK_MINUTES: ${NEM_5M_LOOKBACK_MINUTES:-30}
+      NEM_DAILY_LOOKBACK_DAYS: ${NEM_DAILY_LOOKBACK_DAYS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -183,3 +227,5 @@ services:
 volumes:
   electricity_analytics_postgres_data:
     name: electricity_analytics_postgres_data
+  electricity_analytics_test_postgres_data:
+    name: electricity_analytics_test_postgres_data

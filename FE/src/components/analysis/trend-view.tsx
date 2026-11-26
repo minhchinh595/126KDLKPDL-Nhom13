@@ -1,47 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { DemandPoint } from "@/lib/analysis-data";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { parseTrend, rangeParams } from "@/lib/analytics-api";
 import { AnalysisWorkspace, ChartFrame, DataTable, ExportCsv, format, Panel, Selector, Stat } from "./analysis-shared";
 import { ApiResult } from "./api-result";
-import { SeasonalityApiChart } from "./api-charts";
+import type { Granularity } from "@/lib/analysis-data";
+import { useState } from "react";
 
-function TrendView({ points }: { points: DemandPoint[] }) {
-  const [window, setWindow] = useState(6);
-  return <>
-    <Panel title="Xu hướng và trung bình trượt" description="Kết quả tính bởi Analysis Service. Cửa sổ chỉ dùng các tháng trong khoảng lọc; các tháng đầu chưa đủ lịch sử sẽ có dấu —."
-      actions={<Selector label="Cửa sổ trung bình trượt" value={String(window)} onChange={value => setWindow(Number(value))} options={[3, 6, 12].map(value => ({ value: String(value), label: `${value} tháng` }))} />}>
-      <ApiResult endpoint="/api/analysis/trend" params={{ ...rangeParams(points), window_months: window }} parse={parseTrend}>{result => {
-        const latest = result.records.at(-1);
-        const first = result.records[0];
-        const change = first && latest && first.value !== 0 && result.records.length > 1 ? (latest.value / first.value - 1) * 100 : null;
-        if (!latest) return <p role="status">Không có kết quả xu hướng trong khoảng đã chọn.</p>;
-        const headers = ["Tháng", "Tiêu thụ (TWh)", `MA${result.window_months} (TWh)`];
-        return <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Stat label="Tiêu thụ cuối kỳ" value={`${format(latest.value)} TWh`} detail={latest.month} />
-            <Stat label={`Trung bình trượt ${result.window_months} tháng`} value={format(latest.trend)} detail={latest.trend === null ? "Chưa đủ lịch sử trong khoảng lọc" : "TWh · trailing rolling mean"} />
-            <Stat label="Biến động đầu → cuối kỳ" value={change === null ? "—" : `${change > 0 ? "+" : ""}${format(change)}%`} detail="Từ chuỗi API; chưa điều chỉnh mùa vụ" />
-          </div>
-          <ChartFrame label="Chuỗi tiêu thụ và trung bình trượt từ API xu hướng">
-            <ResponsiveContainer width="100%" height="100%"><LineChart data={result.records} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" /><XAxis dataKey="month" minTickGap={35} tick={{ fontSize: 11 }} /><YAxis width={60} tick={{ fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "var(--card)", borderColor: "var(--border)", color: "var(--foreground)" }} formatter={value => `${format(Number(value))} TWh`} /><Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line dataKey="value" name="Tiêu thụ (TWh)" stroke="#94a3b8" strokeWidth={1.5} dot={result.records.length === 1} />
-              <Line dataKey="trend" name={`Trung bình ${result.window_months} tháng (TWh)`} stroke="#f59e0b" strokeWidth={3} dot={result.records.length === 1} connectNulls={false} />
-            </LineChart></ResponsiveContainer>
-          </ChartFrame>
-          <ExportCsv filename={`trend-ma${result.window_months}-api.csv`} headers={headers} rows={result.records.map(row => [row.month, row.value, row.trend])} />
-          <DataTable caption="Kết quả xu hướng từ API" headers={headers} rows={result.records.map(row => [row.month, format(row.value), format(row.trend)])} />
-        </div>;
-      }}</ApiResult>
-    </Panel>
-    <Panel title="Quy luật theo tháng trong năm" description="Trung bình, trung vị và khoảng tiêu thụ được trả về từ API mùa vụ.">
-      <SeasonalityApiChart points={points} />
-      {points.length < 24 && <p className="text-xs text-muted-foreground">Dưới 24 tháng dữ liệu: chưa đủ nhiều chu kỳ để kết luận về mùa vụ.</p>}
-    </Panel>
-  </>;
+function TrendView({ points }: { points: { date: string; value: number }[] }) {
+  const [view, setView] = useState<Granularity>("day");
+  return <Panel title="Xu hướng nhu cầu NEM" description="API trả nhu cầu MW theo ngày hoặc trung bình MW trong tuần/tháng; không cộng MW thành năng lượng.">
+    <Selector label="Độ phân giải" value={view} onChange={value => setView(value as Granularity)} options={[{ value: "day", label: "Ngày" }, { value: "week", label: "Tuần (trung bình)" }, { value: "month", label: "Tháng (trung bình)" }]} />
+    <ApiResult endpoint="/api/analysis/trend" params={{ ...rangeParams(points), metric: "demand", view }} parse={parseTrend}>{result => {
+      const rows = result.records;
+      const latest = rows.at(-1);
+      return <div className="space-y-4"><div className="grid grid-cols-1 sm:grid-cols-3 gap-4"><Stat label="Điểm trong chuỗi" value={String(rows.length)} detail={`${result.view} · ${result.aggregation}`} /><Stat label="Quan sát cuối" value={latest?.value == null ? "—" : `${format(latest.value)} ${result.unit}`} detail={latest?.period ?? "Không có dữ liệu"} /><Stat label="Độ phủ cuối kỳ" value={latest?.coverage_fraction == null ? "—" : `${format(latest.coverage_fraction * 100)}%`} detail={latest ? `${latest.sample_count}/${latest.expected_days} ngày` : "—"} /></div>
+        {!rows.length ? <p role="status">Không có điểm xu hướng trong khoảng đã chọn.</p> : <><ChartFrame label={`Nhu cầu NEM ${view}, ${result.unit}`}><ResponsiveContainer width="100%" height="100%"><LineChart data={rows}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="period" minTickGap={35} tick={{ fontSize: 11 }} /><YAxis width={70} /><Tooltip formatter={value => `${format(Number(value))} ${result.unit}`} /><Line type="monotone" dataKey="value" name={`${view === "day" ? "Nhu cầu ngày" : `Trung bình ${view}`} (${result.unit})`} stroke="#f59e0b" strokeWidth={2} dot={false} connectNulls={false} /></LineChart></ResponsiveContainer></ChartFrame>
+        <ExportCsv filename={`nem-trend-${view}.csv`} headers={["Period", `Value (${result.unit})`, "Sample count", "Expected days", "Coverage"]} rows={rows.map(row => [row.period, row.value, row.sample_count, row.expected_days, row.coverage_fraction])} /><DataTable caption="Xu hướng NEM" headers={["Kỳ", `Nhu cầu (${result.unit})`, "Số mẫu", "Số ngày kỳ vọng", "Độ phủ"]} rows={rows.map(row => [row.period, format(row.value), row.sample_count, row.expected_days, row.coverage_fraction == null ? "—" : `${format(row.coverage_fraction * 100)}%`])} /></>}
+      </div>;
+    }}</ApiResult>
+  </Panel>;
 }
 export function TrendAnalysis() { return <AnalysisWorkspace kind="trend">{points => <TrendView points={points} />}</AnalysisWorkspace>; }

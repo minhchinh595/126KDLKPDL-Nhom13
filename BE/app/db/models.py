@@ -4,11 +4,13 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -62,6 +64,9 @@ class Dataset(TimestampMixin, Base):
         back_populates="dataset", cascade="all, delete-orphan"
     )
     import_history: Mapped[list["DatasetImport"]] = relationship(
+        back_populates="dataset", cascade="all, delete-orphan"
+    )
+    nem_observations: Mapped[list["NEMObservation"]] = relationship(
         back_populates="dataset", cascade="all, delete-orphan"
     )
 
@@ -123,6 +128,53 @@ class ElectricityConsumption(Base):
     )
 
     dataset: Mapped[Dataset] = relationship(back_populates="consumption_records")
+
+
+class NEMObservation(Base):
+    __tablename__ = "nem_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "network_code",
+            "metric",
+            "interval",
+            "observed_at",
+            "result",
+            "grouping_type",
+            "grouping_code",
+            name="uq_nem_observations_natural_key",
+        ),
+        Index("ix_nem_observations_dataset_id", "dataset_id"),
+        Index("ix_nem_observations_observed_at", "observed_at"),
+        Index(
+            "ix_nem_observations_metric_interval_time",
+            "metric",
+            "interval",
+            "observed_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    network_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    metric: Mapped[str] = mapped_column(String(80), nullable=False)
+    interval: Mapped[str] = mapped_column(String(10), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    value: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    result: Mapped[str] = mapped_column(String(120), nullable=False)
+    grouping_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="network", server_default="network"
+    )
+    grouping_code: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    dataset: Mapped[Dataset] = relationship(back_populates="nem_observations")
 
 
 class ModelRun(Base):

@@ -33,7 +33,9 @@ class AnalysisServiceClient:
 
     def analyze(self, operation: str, records: list[dict], **options) -> dict:
         if operation not in {
-            "summary", "trend", "seasonality", "correlation", "distribution"
+            "summary", "trend", "seasonality", "correlation", "distribution",
+            "nem-summary", "nem-trend", "nem-seasonality", "nem-correlation",
+            "nem-distribution", "nem-scatter",
         }:
             raise ValueError("Unsupported analysis operation")
 
@@ -73,7 +75,8 @@ class AnalysisServiceClient:
                 "Analysis records cannot be serialized"
             )
 
-        url = f"{base_url}/internal/analysis/{operation}"
+        route = operation.removeprefix("nem-") if operation.startswith("nem-") else operation
+        url = f"{base_url}/internal/analysis/{'nem/' if operation.startswith('nem-') else ''}{route}"
 
         request = Request(
             url,

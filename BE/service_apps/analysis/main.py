@@ -1,10 +1,11 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 
 from app.analysis.correlation import build_correlation
 from app.analysis.distribution import build_distribution
 from app.analysis.seasonality import build_seasonality
 from app.analysis.statistics import build_summary
 from app.analysis.trends import build_trend
+from app.analysis.nem import correlation as nem_correlation, distribution as nem_distribution, scatter as nem_scatter, seasonality as nem_seasonality, summary as nem_summary, trend as nem_trend
 from app.schemas.analysis import (
     CorrelationResponse,
     DistributionResponse,
@@ -18,10 +19,12 @@ from service_apps.analysis.schemas import (
     DistributionRequest,
     TrendRequest,
 )
+from service_apps.analysis.nem_schemas import NEMDistributionRequest, NEMRecordsRequest, NEMScatterRequest, NEMTrendRequest
+from zoneinfo import ZoneInfo
 
 app = FastAPI(
     title="Electricity Analytics - Analysis Service",
-    description="Internal stateless monthly electricity analysis service",
+    description="Internal stateless NEM descriptive analysis with legacy monthly operations",
     version="1.0.0",
 )
 
@@ -95,3 +98,54 @@ def correlation(payload: AnalysisRecordsRequest) -> dict:
 )
 def distribution(payload: DistributionRequest) -> dict:
     return {"unit": "TWh", **build_distribution(_records(payload), bins=payload.bins)}
+
+
+def _nem_records(payload: NEMRecordsRequest, *, allow_five_minute: bool = False) -> list[dict]:
+    records = [record.model_dump() for record in payload.records]
+    daily_keys = set()
+    units = {}
+    for record in records:
+        observed_at = record["observed_at"]
+        record["observed_at"] = record["observed_at"].isoformat()
+        valid_interval = record["interval"] == "1d" or (allow_five_minute and record["metric"] == "demand" and record["interval"] == "5m")
+        if not valid_interval or record["grouping_type"] != "network" or record["grouping_code"]:
+            raise HTTPException(status_code=422, detail="NEM descriptive analysis requires supported network-level observations")
+        if record["metric"] in units and units[record["metric"]] != record["unit"]:
+            raise HTTPException(status_code=422, detail="NEM metric series contains inconsistent units")
+        units[record["metric"]] = record["unit"]
+        if record["interval"] == "1d":
+            key = (record["metric"], observed_at.astimezone(ZoneInfo("Australia/Brisbane")).date())
+            if key in daily_keys:
+                raise HTTPException(status_code=422, detail="multiple daily series exist for the same metric and NEM-local date")
+            daily_keys.add(key)
+    return records
+
+
+@app.post("/internal/analysis/nem/summary", dependencies=[Depends(require_analysis_service_secret)])
+def nem_summary_endpoint(payload: NEMRecordsRequest) -> dict:
+    return nem_summary(_nem_records(payload))
+
+
+@app.post("/internal/analysis/nem/trend", dependencies=[Depends(require_analysis_service_secret)])
+def nem_trend_endpoint(payload: NEMTrendRequest) -> dict:
+    return nem_trend(_nem_records(payload), payload.view, payload.metric)
+
+
+@app.post("/internal/analysis/nem/seasonality", dependencies=[Depends(require_analysis_service_secret)])
+def nem_seasonality_endpoint(payload: NEMRecordsRequest) -> dict:
+    return nem_seasonality(_nem_records(payload))
+
+
+@app.post("/internal/analysis/nem/correlation", dependencies=[Depends(require_analysis_service_secret)])
+def nem_correlation_endpoint(payload: NEMRecordsRequest) -> dict:
+    return nem_correlation(_nem_records(payload))
+
+
+@app.post("/internal/analysis/nem/distribution", dependencies=[Depends(require_analysis_service_secret)])
+def nem_distribution_endpoint(payload: NEMDistributionRequest) -> dict:
+    return nem_distribution(_nem_records(payload, allow_five_minute=True), payload.metric, payload.interval, payload.bins)
+
+
+@app.post("/internal/analysis/nem/scatter", dependencies=[Depends(require_analysis_service_secret)])
+def nem_scatter_endpoint(payload: NEMScatterRequest) -> dict:
+    return nem_scatter(_nem_records(payload), payload.x_metric, payload.y_metric)

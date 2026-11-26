@@ -1,6 +1,10 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from app.services.nem_import import NEM_DATASET_NAME, NEM_DATASET_SOURCE
 
 
 class DatasetPublic(BaseModel):
@@ -17,6 +21,14 @@ class DatasetPublic(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def source_role(self) -> Literal["active_nem", "legacy"]:
+        """Identify retained VNM datasets without changing their stored metadata."""
+        if self.name == NEM_DATASET_NAME and self.source == NEM_DATASET_SOURCE:
+            return "active_nem"
+        return "legacy"
 
 
 class DatasetListResponse(BaseModel):

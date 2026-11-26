@@ -4,8 +4,9 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 
 from app.classification.model import classify_next_month, train_and_save_model
+from app.classification.nem_classifier import classify_next_nem_day, train_nem_daily_classifier
 from service_apps.classification.auth import require_classification_service_secret
-from service_apps.classification.schemas import ClassificationRecordsRequest
+from service_apps.classification.schemas import ClassificationRecordsRequest, NEMClassificationRequest
 
 
 logger = logging.getLogger(__name__)
@@ -109,3 +110,51 @@ def run_model(payload: ClassificationRecordsRequest) -> dict[str, Any]:
             status_code=500,
             detail="Classification could not be completed",
         ) from exc
+
+
+@app.post(
+    "/internal/classification/nem/train",
+    dependencies=[Depends(require_classification_service_secret)],
+    tags=["Internal NEM Classification"],
+)
+def train_nem_model(payload: NEMClassificationRequest) -> dict[str, Any]:
+    logger.info("NEM classification training requested: samples=%s", payload.training_sample_count)
+    try:
+        result = train_nem_daily_classifier(payload)
+        logger.info("NEM classification training completed")
+        return result
+    except ValueError as exc:
+        logger.warning("NEM classification training rejected: %s", str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Could not write NEM Classification artifact")
+        raise HTTPException(status_code=507, detail="NEM Classification artifact could not be saved") from exc
+    except Exception as exc:
+        logger.exception("NEM classification training failed")
+        raise HTTPException(status_code=500, detail="NEM classification training could not be completed") from exc
+
+
+@app.post(
+    "/internal/classification/nem/run",
+    dependencies=[Depends(require_classification_service_secret)],
+    tags=["Internal NEM Classification"],
+)
+def run_nem_model(payload: NEMClassificationRequest) -> dict[str, Any]:
+    logger.info("NEM classification run requested: observations=%s", payload.observation_count)
+    try:
+        result = classify_next_nem_day(payload)
+        logger.info("NEM classification run completed: forecast_date=%s", result["forecast_date"])
+        return result
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="NEM Classification artifact is missing. An Admin must train it first.") from exc
+    except ValueError as exc:
+        if "artifact" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="NEM Classification artifact is incompatible with current data") from exc
+        logger.warning("NEM classification run rejected: %s", str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Could not read NEM Classification artifact")
+        raise HTTPException(status_code=500, detail="NEM Classification artifact could not be read") from exc
+    except Exception as exc:
+        logger.exception("NEM classification run failed")
+        raise HTTPException(status_code=500, detail="NEM classification could not be completed") from exc

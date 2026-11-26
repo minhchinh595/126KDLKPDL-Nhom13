@@ -8,10 +8,17 @@ from app.clustering.kmeans import (
     build_clustering_result,
     train_and_save_model,
 )
+from app.clustering.nem_kmeans import (
+    NEMClusteringArtifactError,
+    run_nem_clustering,
+    train_nem_clustering,
+)
 from service_apps.clustering.auth import require_clustering_service_secret
 from service_apps.clustering.schemas import (
     ClusteringRunRequest,
     ClusteringTrainRequest,
+    NEMClusteringRequest,
+    NEMClusteringTrainRequest,
 )
 
 
@@ -19,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Electricity Analytics - Clustering Service",
-    description="Internal K-Means service for monthly electricity demand",
-    version="1.0.0",
+    description="Internal K-Means service for legacy monthly and NEM daily electricity data",
+    version="2.0.0",
 )
 
 
@@ -86,3 +93,40 @@ def run_model(payload: ClusteringRunRequest) -> dict[str, Any]:
             status_code=500,
             detail="Clustering could not be completed",
         ) from exc
+
+
+@app.post(
+    "/internal/clustering/nem/train",
+    dependencies=[Depends(require_clustering_service_secret)],
+    tags=["Internal NEM Clustering"],
+)
+def train_nem_model(payload: NEMClusteringTrainRequest) -> dict[str, Any]:
+    try:
+        return train_nem_clustering(payload, max_k=payload.max_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Could not save NEM Clustering model artifact")
+        raise HTTPException(status_code=500, detail="Could not save the NEM Clustering model artifact") from exc
+    except Exception as exc:
+        logger.exception("NEM Clustering training failed")
+        raise HTTPException(status_code=500, detail="NEM Clustering training could not be completed") from exc
+
+
+@app.post(
+    "/internal/clustering/nem/run",
+    dependencies=[Depends(require_clustering_service_secret)],
+    tags=["Internal NEM Clustering"],
+)
+def run_nem_model(payload: NEMClusteringRequest) -> dict[str, Any]:
+    try:
+        return run_nem_clustering(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="NEM clustering artifact is missing; an Admin must train it first") from exc
+    except NEMClusteringArtifactError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("NEM Clustering run failed")
+        raise HTTPException(status_code=500, detail="NEM Clustering could not be completed") from exc

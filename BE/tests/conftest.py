@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import sessionmaker
 
 from app.core.security import hash_password
@@ -15,14 +16,42 @@ from app.db.models import User
 from app.main import app
 
 
+def _validate_test_database_url(url: str | None) -> str:
+    """Validate the dedicated test DB target without exposing URL contents."""
+    if not url or not url.strip():
+        raise ValueError("TEST_DATABASE_URL is missing; refusing to create a database engine")
+
+    try:
+        parsed = make_url(url)
+    except (ArgumentError, TypeError, ValueError):
+        raise ValueError("TEST_DATABASE_URL is not a valid SQLAlchemy URL") from None
+
+    failures = []
+    if parsed.host not in {"127.0.0.1", "localhost"}:
+        failures.append("hostname must be 127.0.0.1 or localhost")
+    if parsed.port != 5435:
+        failures.append("port must be 5435")
+    if parsed.database != "electricity_analytics_test":
+        failures.append("database must be electricity_analytics_test")
+    if parsed.username != "electricity_test":
+        failures.append("username must be electricity_test")
+    if parsed.get_backend_name() != "postgresql":
+        failures.append("URL must use PostgreSQL")
+
+    if failures:
+        raise ValueError(
+            "Refusing database access: TEST_DATABASE_URL requirements not met: "
+            + "; ".join(failures)
+        )
+    return url
+
+
 @pytest.fixture(scope="session")
 def test_engine():
-    url = os.getenv("TEST_DATABASE_URL", "")
-    if not url:
-        pytest.fail("Set TEST_DATABASE_URL to a dedicated PostgreSQL database ending in _test")
-    parsed = make_url(url)
-    if parsed.database != "electricity_analytics_test":
-        pytest.fail("Refusing to use any database except electricity_analytics_test")
+    try:
+        url = _validate_test_database_url(os.getenv("TEST_DATABASE_URL"))
+    except ValueError as exc:
+        pytest.fail(str(exc), pytrace=False)
     engine = create_engine(url, pool_pre_ping=True)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)

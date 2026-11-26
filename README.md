@@ -126,14 +126,13 @@ Hoặc sau khi kích hoạt virtualenv tại `BE`, dùng các lệnh `alembic up
 `alembic revision --autogenerate -m "describe schema change"`. Migration được lưu
 trong `BE/alembic/versions`; không sửa migration đã áp dụng.
 
-Import dataset đã xử lý (chỉ chạy khi migration đã hoàn tất):
+Lệnh sau là workflow lịch sử cho CSV VNM theo tháng, không phải cách nạp dữ liệu NEM hiện tại. Không dùng script này để bổ sung Open Electricity NEM; các bảng và dữ liệu VNM cũ vẫn được giữ nguyên. Script kiểm tra schema và từng dòng trước khi ghi, tạo/cập nhật metadata dataset, bỏ qua bản ghi trùng và giữ nguyên CSV nguồn.
 
 ```powershell
 python .\scripts\import_electricity_data.py
 ```
 
-Script kiểm tra schema và từng dòng trước khi ghi, tạo/cập nhật metadata dataset,
-bỏ qua bản ghi trùng và có thể chạy lại. CSV gốc và CSV đã xử lý được giữ nguyên.
+Luồng NEM active sử dụng `nem-ingestion-worker` theo profile opt-in; không chạy worker nếu chưa chủ động cho phép ingestion thật. CSV gốc và đã xử lý của workflow legacy được giữ nguyên.
 Xem dữ liệu bằng pgAdmin với host `127.0.0.1`, port `5433`, database
 `electricity_analytics_db`, và thông tin đăng nhập trong `.env`; hoặc dùng:
 
@@ -225,7 +224,7 @@ http://localhost:3000
 
 ## 7. Chạy toàn bộ hệ thống bằng Docker Compose
 
-Docker Compose khởi chạy PostgreSQL, Backend API Gateway, năm backend service độc lập và Frontend. Chỉ Gateway kết nối PostgreSQL; Gateway gọi các service nội bộ qua DNS của Docker. Cấu hình hiện tại không tự chạy migration hoặc import dataset khi khởi động.
+Docker Compose khởi chạy PostgreSQL, Gateway, Analysis, Clustering, Prediction, Classification và Frontend trong cấu hình mặc định. Chỉ Gateway kết nối PostgreSQL; Gateway gọi các service nội bộ qua DNS của Docker. CSV Ingestion chỉ bật qua profile `legacy-csv`; NEM worker chỉ bật qua profile `nem-ingestion`. Cả hai profile đều opt-in, và Compose không tự chạy migration hoặc import dataset khi khởi động.
 
 ### 7.1. Cổng truy cập
 
@@ -238,7 +237,8 @@ Docker Compose khởi chạy PostgreSQL, Backend API Gateway, năm backend servi
 | Clustering | 8102 | Chỉ nội bộ Docker: `clustering:8102` |
 | Prediction | 8103 | Chỉ nội bộ Docker: `prediction:8103` |
 | Classification | 8104 | Chỉ nội bộ Docker: `classification:8104` |
-| Ingestion | 8105 | Chỉ nội bộ Docker: `ingestion:8105` |
+| CSV Ingestion legacy | 8105 | Chỉ nội bộ Docker khi dùng profile `legacy-csv` |
+| NEM ingestion worker | — | Không publish port; profile `nem-ingestion` |
 
 Các cổng 8101–8105 không được publish ra máy host. Gateway nhận request từ host qua cổng 8001 và lắng nghe cổng 8000 bên trong container.
 
@@ -270,7 +270,7 @@ docker compose config --quiet
 docker compose up -d --build
 ```
 
-Compose build một Backend image dùng chung cho Gateway và năm service nội bộ. PostgreSQL tiếp tục dùng container `electricity-analytics-postgres` và volume persistent `electricity_analytics_postgres_data`. Thư mục `BE/uploads` được mount cho file upload; `BE/artifacts` được chia sẻ với các service ML; thư mục `data` được mount chỉ đọc.
+Compose dùng Backend image chung cho Gateway và các service nội bộ. PostgreSQL tiếp tục dùng container `electricity-analytics-postgres` và volume persistent `electricity_analytics_postgres_data`. `BE/artifacts` được chia sẻ với các service ML. CSV Ingestion legacy không thuộc cấu hình service mặc định; NEM worker chỉ chạy khi profile `nem-ingestion` được bật có chủ đích.
 
 ### 7.3. Health, log và dừng hệ thống
 
@@ -279,7 +279,7 @@ Compose build một Backend image dùng chung cho Gateway và năm service nội
 - PostgreSQL từ máy host: `127.0.0.1:5433`.
 - Health endpoint của năm service nội bộ được Compose kiểm tra, nhưng không publish cổng ra host.
 
-Xem log bằng `docker compose logs -f gateway`; thay `gateway` bằng `frontend`, `postgres`, `analysis`, `clustering`, `prediction`, `classification` hoặc `ingestion` để xem service tương ứng.
+Xem log bằng `docker compose logs -f gateway`; thay `gateway` bằng `frontend`, `postgres`, `analysis`, `clustering` hoặc `prediction`, `classification` để xem service tương ứng. Chỉ xem `ingestion` hoặc `nem-ingestion-worker` khi operator đã bật profile tương ứng.
 
 Dừng các service mà vẫn giữ dữ liệu persistent:
 
@@ -305,4 +305,18 @@ python -m uvicorn service_apps.classification.main:app --reload --host 127.0.0.1
 python -m uvicorn service_apps.ingestion.main:app --reload --host 127.0.0.1 --port 8105 --env-file ..\.env
 ```
 
-Mỗi lệnh Uvicorn trên chạy trong một terminal riêng. Frontend local chạy tại `http://localhost:3000`; đặt `NEXT_PUBLIC_API_URL=http://localhost:8000` trong `FE/.env.local` rồi chạy `npm run dev` từ `FE`. Cổng Gateway local là 8000; cổng host của Gateway trong Docker Compose là 8001.
+Các lệnh Gateway và Analysis/Clustering/Prediction/Classification trên dành cho phát triển local, tách biệt với Docker Compose. Lệnh Ingestion ở trên chỉ dành cho kiểm thử legacy CSV; các API CSV Gateway hiện trả HTTP 410. Frontend local chạy tại `http://localhost:3000`; đặt `NEXT_PUBLIC_API_URL=http://localhost:8000` trong `FE/.env.local` rồi chạy `npm run dev` từ `FE`. Cổng Gateway local là 8000; cổng host của Gateway trong Docker Compose là 8001.
+
+## 9. Nguồn dữ liệu và các mô hình NEM hiện tại
+
+Open Electricity NEM là dataset active cho API điện năng, Dashboard, Analysis và ba luồng ML: network `NEM`, interval daily `1d`, demand unit `MW`, timezone `Australia/Brisbane`. Gateway đọc NEM observations trong PostgreSQL, kiểm tra phân quyền, gọi Clustering/Prediction/Classification Service qua HTTP rồi lưu kết quả/provenance trong `model_runs` JSONB. Các service ML không kết nối PostgreSQL; NEM Loader xác thực nguồn/network/unit và báo gaps mà không nội suy, zero-fill hoặc fallback sang VNM.
+
+- **Clustering:** nhóm các ngày NEM có đặc điểm vận hành tương tự từ metric daily network-level; nhãn không đại diện vùng địa lý.
+- **Prediction:** dự báo nhu cầu ngày tiếp theo theo Brisbane, unit MW; Prediction dùng contract H2 `nem_daily_demand_h2_v1`.
+- **Classification:** phân loại nhu cầu ngày tiếp theo thành `Low` hoặc `High` theo cùng contract H2; validation dùng threshold median chỉ từ training split của từng fold.
+
+Artifact inference NEM tách biệt: Clustering dùng `electricity_nem_daily_kmeans.joblib`; Prediction H2 dùng `electricity_nem_daily_demand_rf_h2.joblib`; Classification H2 dùng `electricity_nem_daily_demand_classifier_h2.joblib`. Chúng nằm trong `BE/artifacts`, được mount cho ML services trong Compose. Admin gọi Train tường minh; Run dùng artifact đã lưu, không train lại. Analyst chỉ đọc latest/history. Artifact VNM và NEM H1 cũ vẫn được giữ lại, không bị xóa và không thay thế H2. Chi tiết API, lệnh chạy, RBAC và biến cấu hình artifact nằm trong [BE/README.md](BE/README.md).
+
+Snapshot dữ liệu trong quá trình migration được báo cáo có khoảng 365 ngày daily và khoảng 30 ngày dữ liệu 5 phút; độ phủ thay đổi theo ingestion. Các mô hình ML hiện dùng daily data. Chronological validation và các chỉ số hiện có không bảo đảm độ chính xác trên tương lai, và chưa đủ căn cứ để tuyên bố hệ thống production-ready.
+
+Các module và artifact monthly VNM cũ vẫn được giữ lại để tương thích/tham khảo, nhưng không còn là nguồn dữ liệu hoạt động và các route NEM không fallback về VNM.

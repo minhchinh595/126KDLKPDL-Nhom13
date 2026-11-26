@@ -46,7 +46,7 @@ function Workspace() {
         <Pagination page={page} pages={data.pages} total={data.total} onChange={value => { setPage(value); setSelected(null); }} />
       </div>}</QueryState>
     </Panel>
-    {selected !== null && <Panel title={`Chi tiết lượt #${selected}`} actions={<Button variant="ghost" onClick={() => setSelected(null)}>Đóng chi tiết</Button>}><QueryState resource={detail} empty="Lượt chạy không còn tồn tại hoặc không thuộc quyền truy cập hiện tại.">{run => <ModelResult run={run} />}</QueryState></Panel>}
+    {selected !== null && <Panel title={`Chi tiết lượt #${selected}`} actions={<Button variant="ghost" onClick={() => setSelected(null)}>Đóng chi tiết</Button>}><QueryState resource={detail} empty="Lượt chạy không còn tồn tại hoặc không thuộc quyền truy cập hiện tại.">{run => <ModelResult run={run} requireH2={run.model_type === "prediction" || run.model_type === "classification"} />}</QueryState></Panel>}
   </div>;
 }
 export function ModelManagement() { return <AppLayout><Workspace /></AppLayout>; }

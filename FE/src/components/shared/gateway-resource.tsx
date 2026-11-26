@@ -5,11 +5,12 @@ import { gatewayRequest } from "@/lib/gateway";
 import { DemandApiError } from "@/lib/demand-api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { modelRunQueryKey } from "@/lib/model-run-state";
 
 export function useGatewayQuery<T>(path: string | null, revision = 0) {
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ key: string; data?: T; error?: Error; status: "success" | "error" | "empty" } | null>(null);
-  const key = `${path}#${revision}#${attempt}`;
+  const key = modelRunQueryKey(path, revision, attempt);
   useEffect(() => {
     if (!path) return;
     const controller = new AbortController();

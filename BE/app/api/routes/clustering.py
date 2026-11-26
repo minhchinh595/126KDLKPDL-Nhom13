@@ -14,6 +14,10 @@ from app.clients.clustering import (
 from app.db.database import get_db
 from app.db.models import ElectricityConsumption, ModelRun
 from app.api.dependencies import require_admin, require_analyst
+from app.services.nem_data import NEMDatasetUnavailable
+from app.services.nem_ml_data import NEMMLDataError, load_nem_clustering_input
+from app.services.nem_model_runs import nem_model_run_filter
+from app.services.model_provenance import ModelProvenanceError, merge_training_model_provenance
 from math import ceil
 from app.schemas.model_runs import ModelRunListResponse, ModelRunPublic
 
@@ -44,6 +48,46 @@ def _load_demand_records(db: Session) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def _load_nem_clustering_payload(db: Session) -> dict:
+    return load_nem_clustering_input(db).as_service_payload()
+
+
+def _nem_provenance(payload: dict) -> dict:
+    return {
+        "dataset_name": payload["dataset_name"],
+        "dataset_source": payload["dataset_source"],
+        "dataset_id": payload["dataset_id"],
+        "network_code": payload["network_code"],
+        "interval": payload["interval"],
+        "feature_configurations": {
+            name: {
+                "feature_names": config["feature_names"],
+                "feature_units": config["feature_units"],
+                "training_start": config["start_date"],
+                "training_end": config["end_date"],
+                "observation_count": config["observation_count"],
+                "data_fingerprint": config["data_fingerprint"],
+                "dropped_date_count": config["dropped_date_count"],
+                "dropped_reasons": config["dropped_reasons"],
+                "metric_quality": config["metric_quality"],
+            }
+            for name, config in payload["configurations"].items()
+        },
+    }
+
+
+def _nem_training_provenance(payload: dict, result: dict) -> dict:
+    try:
+        provenance = merge_training_model_provenance(
+            _nem_provenance(payload), result.get("model_provenance"),
+            expected_model_type="clustering",
+        )
+    except ModelProvenanceError as exc:
+        raise ClusteringServiceUnavailable("Clustering Service returned invalid model metadata") from exc
+    result.pop("model_provenance", None)
+    return provenance
 
 
 def _serialize_run(run: ModelRun) -> dict:
@@ -77,18 +121,19 @@ def _save_failed_training(db: Session, *, started_at: datetime, error: str) -> N
 
 @router.post("/clustering/train", response_model=ModelRunPublic)
 def train_clustering_model(
-    max_k: int = Query(default=5, ge=2, le=8),
+    max_k: int = Query(default=5, ge=2, le=5),
     db: Session = Depends(get_db),
     _: object = Depends(require_admin),
 ):
     started_at = datetime.now(timezone.utc)
     try:
-        records = _load_demand_records(db)
-        result = clustering_service_client.train(records, max_k=max_k)
+        payload = _load_nem_clustering_payload(db)
+        result = clustering_service_client.train_nem(payload, max_k=max_k)
+        provenance = _nem_training_provenance(payload, result)
         run = ModelRun(
             model_type="clustering", status="completed", started_at=started_at,
             completed_at=datetime.now(timezone.utc),
-            parameters={"stage": "training", "max_k": max_k}, metrics=result,
+            parameters={"stage": "training", "max_k": max_k, "provenance": provenance}, metrics=result,
         )
         db.add(run)
         db.commit()
@@ -106,6 +151,14 @@ def train_clustering_model(
         db.rollback()
         _save_failed_training(db, started_at=started_at, error=str(exc))
         raise HTTPException(status_code=503, detail="Clustering Service is unavailable") from exc
+    except NEMDatasetUnavailable as exc:
+        db.rollback()
+        _save_failed_training(db, started_at=started_at, error="Open Electricity NEM dataset is unavailable")
+        raise HTTPException(status_code=503, detail="Open Electricity NEM dataset is unavailable") from exc
+    except NEMMLDataError as exc:
+        db.rollback()
+        _save_failed_training(db, started_at=started_at, error=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="Clustering data or run history is unavailable in PostgreSQL") from exc
@@ -133,8 +186,9 @@ def run_clustering(
     try:
         db.flush()
 
-        records = _load_demand_records(db)
-        result = clustering_service_client.run(records)
+        payload = _load_nem_clustering_payload(db)
+        run.parameters = {"stage": "run", "provenance": _nem_provenance(payload)}
+        result = clustering_service_client.run_nem(payload)
 
         run.status = "completed"
         run.metrics = result
@@ -174,6 +228,26 @@ def run_clustering(
             db.rollback()
         raise HTTPException(status_code=503, detail="Clustering Service is unavailable") from exc
 
+    except NEMDatasetUnavailable as exc:
+        run.status = "failed"
+        run.error_message = "Open Electricity NEM dataset is unavailable"
+        run.completed_at = datetime.now(timezone.utc)
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+        raise HTTPException(status_code=503, detail="Open Electricity NEM dataset is unavailable") from exc
+
+    except NEMMLDataError as exc:
+        run.status = "failed"
+        run.error_message = str(exc)[:2000]
+        run.completed_at = datetime.now(timezone.utc)
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -204,7 +278,7 @@ def get_latest_clustering(
     statement = (
         select(ModelRun)
         .where(
-            ModelRun.model_type == "clustering",
+            nem_model_run_filter("clustering"),
             ModelRun.status == "completed",
             ModelRun.metrics["stage"].astext == "run",
         )
@@ -231,8 +305,9 @@ def get_latest_clustering(
 
 @router.get("/clustering/runs", response_model=ModelRunListResponse, dependencies=[Depends(require_analyst)])
 def list_clustering_runs(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
-    count = db.scalar(select(func.count()).select_from(ModelRun).where(ModelRun.model_type == "clustering")) or 0
-    rows = db.scalars(select(ModelRun).where(ModelRun.model_type == "clustering").order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    nem_filter = nem_model_run_filter("clustering")
+    count = db.scalar(select(func.count()).select_from(ModelRun).where(nem_filter)) or 0
+    rows = db.scalars(select(ModelRun).where(nem_filter).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
     return {"items": [_serialize_run(row) for row in rows], "page": page, "page_size": page_size, "total": count, "pages": ceil(count / page_size)}
 
 
@@ -243,7 +318,7 @@ def get_clustering_run(
 ):
     statement = select(ModelRun).where(
         ModelRun.id == run_id,
-        ModelRun.model_type == "clustering",
+        nem_model_run_filter("clustering"),
     )
 
     try:

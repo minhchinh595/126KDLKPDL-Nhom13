@@ -9,6 +9,7 @@ from app.api.dependencies import require_analyst
 from app.db.database import get_db
 from app.db.models import ModelRun
 from app.schemas.model_runs import ModelRunListResponse, ModelRunPublic
+from app.services.nem_model_runs import nem_ml_model_run_filter
 
 router = APIRouter(prefix="/model-runs", dependencies=[Depends(require_analyst)])
 
@@ -21,7 +22,9 @@ def list_model_runs(
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    statement, count_statement = select(ModelRun), select(func.count()).select_from(ModelRun)
+    nem_filter = nem_ml_model_run_filter(model_type)
+    statement = select(ModelRun).where(nem_filter)
+    count_statement = select(func.count()).select_from(ModelRun).where(nem_filter)
     if model_type:
         statement, count_statement = statement.where(ModelRun.model_type == model_type), count_statement.where(ModelRun.model_type == model_type)
     if run_status:
@@ -36,7 +39,11 @@ def list_model_runs(
 @router.get("/{run_id}", response_model=ModelRunPublic)
 def get_model_run(run_id: int, db: Session = Depends(get_db)):
     from fastapi import HTTPException
-    run = db.get(ModelRun, run_id)
+    statement = select(ModelRun).where(
+        ModelRun.id == run_id,
+        nem_ml_model_run_filter(),
+    )
+    run = db.execute(statement).scalar_one_or_none()
     if run is None:
         raise HTTPException(status_code=404, detail="Model run not found")
     return run

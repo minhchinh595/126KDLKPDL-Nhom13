@@ -40,6 +40,13 @@ class ClusteringServiceClient:
     def run(self, records: list[dict]) -> dict:
         return self._post("run", {"records": records}, expected_stage="run")
 
+    def train_nem(self, payload: dict, max_k: int = 5) -> dict:
+        request_payload = {**payload, "max_k": max_k}
+        return self._post("nem/train", request_payload, expected_stage="training")
+
+    def run_nem(self, payload: dict) -> dict:
+        return self._post("nem/run", payload, expected_stage="run")
+
     def _post(self, operation: str, payload: dict, *, expected_stage: str) -> dict:
         base_url = (
             self._base_url
